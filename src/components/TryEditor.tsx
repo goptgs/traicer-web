@@ -35,6 +35,7 @@ import {
   type Limits,
 } from "@/lib/traicerArc";
 import { CANT_PLAY_MESSAGE, PROBE_WAIT_MS, playbackGaveUp, probeDuration } from "@/lib/probeClip";
+import { renderInput as fitRenderInput } from "@/lib/renderInput";
 import { parseTrajectory, rowsUntil, trailOpacity, type Trajectory } from "@/lib/trajectory";
 
 type Tool = "ball" | "impact" | "landing";
@@ -437,21 +438,18 @@ export function TryEditor() {
     await run(clip, draftInput(clip, curveHandles(clip.preview)), "update");
   }
 
+  /** Render body: the API still validates landing, and ball + impactTime let it reuse the cached track. */
+  function renderInput(clip: Clip, fitId: string): RenderInput {
+    return fitRenderInput(draftInput(clip, clip.handles), fitId, outputsFor(clip));
+  }
+
   async function renderClip(clip: Clip, allowRetry = true) {
     if (!clip.fitId || clip.preview) return;
-    const result = await run(
-      clip,
-      { fitId: clip.fitId, outputs: outputsFor(clip), color: apiColour(clip.colour) },
-      "render",
-    );
+    const result = await run(clip, renderInput(clip, clip.fitId), "render");
     if (result?.job.errorCode === "FIT_NOT_FOUND" && allowRetry && clip.handles) {
       const updated = await run(clip, draftInput(clip, clip.handles), "update");
       if (updated?.fitId) {
-        await run(
-          { ...clip, fitId: updated.fitId, preview: null },
-          { fitId: updated.fitId, outputs: outputsFor(clip), color: apiColour(clip.colour) },
-          "render",
-        );
+        await run({ ...clip, fitId: updated.fitId, preview: null }, renderInput(clip, updated.fitId), "render");
       }
     }
   }
@@ -782,11 +780,6 @@ export function TryEditor() {
                           setNotice(`${selected.name} is longer than 60 seconds.`);
                         }
                       }
-                      try {
-                        video.currentTime = 0.001;
-                      } catch {
-                        /* WebKit can throw before the first frame is seekable. */
-                      }
                       if (video.videoWidth && video.clientWidth) {
                         setContent(
                           contentRect(
@@ -797,7 +790,16 @@ export function TryEditor() {
                         );
                       }
                     }}
-                    onLoadedData={() => setReadyId(selected.id)}
+                    onLoadedData={() => {
+                      setReadyId(selected.id);
+                      const video = videoRef.current;
+                      if (!video || video.currentTime !== 0) return;
+                      try {
+                        video.currentTime = 0.001;
+                      } catch {
+                        /* Leave the playhead if this frame is not seekable yet. */
+                      }
+                    }}
                     onError={() => setFailedId(selected.id)}
                     onTimeUpdate={() => setTime(videoRef.current?.currentTime ?? 0)}
                   />

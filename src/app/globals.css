@@ -1386,11 +1386,35 @@ input:-webkit-autofill {
   cursor: grab;
 }
 
-.handle.is-apex {
+.handle.is-apex,
+.handle.is-end {
+  width: 44px;
+  height: 44px;
+  margin: -22px 0 0 -22px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+.handle.is-apex::after,
+.handle.is-end::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  border-radius: 50%;
+  border: 2px solid #ffffff;
+  pointer-events: none;
+}
+
+.handle.is-apex::after {
   background: #2ee8ff;
 }
 
-.handle.is-end {
+.handle.is-end::after {
   background: #0a1a2c;
 }
 
