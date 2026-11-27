@@ -25,12 +25,26 @@ export type Box = { left: number; top: number; width: number; height: number };
 
 export type JobStatus = "queued" | "analyzing" | "rendering" | "done" | "error";
 
+export type OutputFormat = "mp4" | "mp4_9x16";
+
+export type VerticalOutput = {
+  downloadUrl?: string;
+  playUrl?: string;
+  aspect?: string;
+};
+
 export type Job = {
   status: JobStatus;
   progress: number;
   message: string;
   downloadUrl?: string;
+  playUrl?: string;
   error?: string;
+  errorCode?: string;
+  ball?: NormPoint;
+  trajectory?: unknown;
+  trajectoryUrl?: string;
+  vertical?: VerticalOutput;
 };
 
 export type UploadTicket = {
@@ -45,6 +59,8 @@ export type RenderInput = {
   hangTime: number;
   shape: ShotShape;
   impactTime?: number;
+  /** [] is trajectory only. Omit nothing: the editor always sends this. */
+  outputs: OutputFormat[];
 };
 
 export const MISSING_API_MESSAGE =
@@ -203,13 +219,40 @@ export async function getJob(base: string, jobId: string, fetchImpl: typeof fetc
   if (!body.status || !STATUSES.has(body.status as JobStatus)) {
     throw new Error("The editor returned a status this page doesn't understand.");
   }
+  const vertical = body.vertical;
   return {
     status: body.status as JobStatus,
     progress: typeof body.progress === "number" ? Math.min(1, Math.max(0, body.progress)) : 0,
     message: typeof body.message === "string" ? body.message : "",
     downloadUrl: typeof body.downloadUrl === "string" ? body.downloadUrl : undefined,
+    playUrl: typeof body.playUrl === "string" ? body.playUrl : undefined,
     error: typeof body.error === "string" ? body.error : undefined,
+    errorCode: typeof body.errorCode === "string" ? body.errorCode : undefined,
+    ball: isPoint(body.ball) ? body.ball : undefined,
+    trajectory: body.trajectory,
+    trajectoryUrl: typeof body.trajectoryUrl === "string" ? body.trajectoryUrl : undefined,
+    vertical:
+      vertical && typeof vertical === "object"
+        ? {
+            downloadUrl: typeof vertical.downloadUrl === "string" ? vertical.downloadUrl : undefined,
+            playUrl: typeof vertical.playUrl === "string" ? vertical.playUrl : undefined,
+            aspect: typeof vertical.aspect === "string" ? vertical.aspect : undefined,
+          }
+        : undefined,
   };
+}
+
+function isPoint(value: unknown): value is NormPoint {
+  if (!value || typeof value !== "object") return false;
+  const point = value as { x?: unknown; y?: unknown };
+  return typeof point.x === "number" && typeof point.y === "number";
+}
+
+export function friendlyJobError(code: string | undefined, fallback: string): string {
+  if (code === "BALL_NOT_FOUND") return "We couldn't find the ball. Tap nearer to it and trace again.";
+  if (code === "BALL_NOT_TRACKED") return "We lost the ball in flight. Move the landing, or pick another shape.";
+  if (code === "RENDER_FAILED") return "The export didn't finish. Press Render to try again.";
+  return fallback;
 }
 
 export function statusLine(job: Job): string {

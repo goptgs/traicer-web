@@ -24,6 +24,28 @@ describe("framePoint", () => {
     assert.equal(framePoint(10, 10, element, 1000, 1000), null);
   });
 
+  it("uses CSS pixels, not device pixels", () => {
+    const element = { left: 0, top: 100, width: 320, height: 180 };
+    const css = framePoint(160, 190, element, 1920, 1080);
+    assert.deepEqual(css, { x: 0.5, y: 0.5 });
+    const devicePixelRatio = 2;
+    const wronglyScaled = framePoint(160 * devicePixelRatio, 190 * devicePixelRatio, element, 1920, 1080);
+    assert.notDeepEqual(wronglyScaled, css);
+  });
+
+  it("keeps a tap on the ball when the picture is letterboxed", () => {
+    const element = { left: 0, top: 200, width: 390, height: 520 };
+    const contentHeight = 390 / (16 / 9);
+    const bar = (520 - contentHeight) / 2;
+    const ballY = 200 + bar + contentHeight * 0.4;
+    const point = framePoint(195, ballY, element, 1920, 1080);
+    assert.ok(point);
+    assert.ok(Math.abs(point.y - 0.4) < 0.001);
+    const ignoredBar = (ballY - element.top) / element.height;
+    assert.ok(Math.abs(ignoredBar - point.y) > 0.05);
+    assert.equal(framePoint(195, ballY - 96, element, 1920, 1080), null);
+  });
+
   it("ignores bars around a wide frame in a square box", () => {
     const element = { left: 100, top: 50, width: 400, height: 400 };
     assert.equal(framePoint(200, 60, element, 1600, 900), null);
