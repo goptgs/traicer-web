@@ -1,0 +1,25 @@
+{
+  "name": "traicer-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TrAIcer marketing site and AI Skill early-access waitlist.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "NEXT_TELEMETRY_DISABLED=1 next build",
+    "test": "node --experimental-strip-types --test src/lib/waitlist.test.ts src/config/pricing.test.ts"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "next": "^16.4.6",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.11",
+    "@types/react": "^19.3.3",
+    "@types/react-dom": "^19.3.0",
+    "typescript": "^7.0.2"
+  }
+}
