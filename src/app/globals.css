@@ -1517,6 +1517,21 @@ input:-webkit-autofill {
   touch-action: none;
 }
 
+.tap-layer.is-waiting {
+  pointer-events: none;
+}
+
+.loading-clip {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  color: #ffffff;
+  background: rgba(7, 21, 38, 0.45);
+}
+
 .grid-cell {
   position: absolute;
   box-sizing: border-box;

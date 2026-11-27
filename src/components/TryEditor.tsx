@@ -26,6 +26,7 @@ import {
   type OutputFormat,
   type ShotShape,
 } from "@/lib/traicerApi";
+import { CANT_PLAY_MESSAGE, PROBE_WAIT_MS, playbackGaveUp, probeDuration } from "@/lib/probeClip";
 import { parseTrajectory, rowsUntil, trailOpacity, type Trajectory } from "@/lib/trajectory";
 
 type Tool = "ball" | "landing";
@@ -87,27 +88,6 @@ function clock(seconds: number): string {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 
-function probeDuration(file: File): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const video = document.createElement("video");
-    video.setAttribute("playsinline", "");
-    video.preload = "metadata";
-    const timer = window.setTimeout(() => finish(new Error("Couldn't read that clip.")), 8000);
-    function finish(error?: Error, duration?: number) {
-      window.clearTimeout(timer);
-      URL.revokeObjectURL(url);
-      video.removeAttribute("src");
-      video.load();
-      if (error) reject(error);
-      else resolve(duration ?? NaN);
-    }
-    video.onloadedmetadata = () => finish(undefined, video.duration);
-    video.onerror = () => finish(new Error("Couldn't read that clip."));
-    video.src = url;
-  });
-}
-
 async function loadTrajectory(job: Job): Promise<Trajectory | null> {
   const inline = parseTrajectory(job.trajectory);
   if (inline) return inline;
@@ -139,10 +119,14 @@ export function TryEditor() {
   const [resetId, setResetId] = useState<string | null>(null);
   const [upgrade, setUpgrade] = useState<string | null>(null);
   const [custom, setCustom] = useState("#2EE8FF");
+  const [readyId, setReadyId] = useState<string | null>(null);
+  const [failedId, setFailedId] = useState<string | null>(null);
   const [signup, setSignup] = useState(false);
   const [content, setContent] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
 
   const selected = clips.find((clip) => clip.id === selectedId) ?? null;
+  const frameReady = Boolean(selected && readyId === selected.id);
+  const playbackError = Boolean(selected && failedId === selected.id);
 
   const clipsRef = useRef(clips);
   clipsRef.current = clips;
@@ -197,6 +181,19 @@ export function TryEditor() {
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     resultRef.current?.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
   }, [selected?.phase, selected?.job?.playUrl, selected?.job?.downloadUrl]);
+
+  useEffect(() => {
+    const clipId = selected?.id;
+    if (!clipId || frameReady) return;
+    const timer = window.setTimeout(() => {
+      const video = videoRef.current;
+      if (!video) return;
+      if (playbackGaveUp({ readyState: video.readyState, videoWidth: video.videoWidth, errored: Boolean(video.error) })) {
+        setFailedId(clipId);
+      }
+    }, PROBE_WAIT_MS);
+    return () => window.clearTimeout(timer);
+  }, [selected?.id, frameReady]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -335,17 +332,13 @@ export function TryEditor() {
         setNotice(`${file.name} is over 500 MB.`);
         continue;
       }
-      let duration = 0;
-      try {
-        duration = await probeDuration(file);
-      } catch (error) {
-        setNotice(plainError(error, `${file.name}: couldn't read that clip.`));
+      const probed = await probeDuration(file);
+      if (probed.status === "reject") {
+        setNotice(probed.reason === "too-long" ? `${file.name} is longer than 60 seconds.` : CANT_PLAY_MESSAGE);
         continue;
       }
-      if (!Number.isFinite(duration) || duration > MAX_CLIP_SECONDS) {
-        setNotice(`${file.name} is longer than 60 seconds.`);
-        continue;
-      }
+      if (probed.status !== "accept") continue;
+      const duration = probed.duration ?? 0;
       const id = crypto.randomUUID();
       const clip: Clip = {
         id,
@@ -400,7 +393,7 @@ export function TryEditor() {
   function tap(event: PointerEvent<HTMLDivElement>) {
     const video = videoRef.current;
     const clip = selected;
-    if (!video || !clip || !clip.stepsOpen) return;
+    if (!video || !clip || !clip.stepsOpen || !frameReady) return;
     if (gridOn && !zoom) {
       const point = framePoint(event.clientX, event.clientY, video.getBoundingClientRect(), video.videoWidth, video.videoHeight);
       if (!point) return;
@@ -587,7 +580,19 @@ export function TryEditor() {
                     onLoadedMetadata={() => {
                       const video = videoRef.current;
                       if (!video) return;
-                      video.currentTime = 0;
+                      const learned = video.duration;
+                      if (Number.isFinite(learned) && learned > 0) {
+                        patch(selected.id, (clip) => ({ ...clip, duration: learned }));
+                        if (learned > MAX_CLIP_SECONDS) {
+                          aborts.current[selected.id]?.();
+                          setNotice(`${selected.name} is longer than 60 seconds.`);
+                        }
+                      }
+                      try {
+                        video.currentTime = 0.001;
+                      } catch {
+                        /* WebKit can throw before the first frame is seekable. */
+                      }
                       if (video.videoWidth && video.clientWidth) {
                         setContent(
                           contentRect(
@@ -598,6 +603,8 @@ export function TryEditor() {
                         );
                       }
                     }}
+                    onLoadedData={() => setReadyId(selected.id)}
+                    onError={() => setFailedId(selected.id)}
                     onTimeUpdate={() => setTime(videoRef.current?.currentTime ?? 0)}
                   />
                   <canvas ref={canvasRef} className="tracer-layer" hidden={!selected.tracerOn || !selected.trajectory} />
@@ -636,7 +643,7 @@ export function TryEditor() {
                     </div>
                   ) : null}
                   <div
-                    className="tap-layer"
+                    className={frameReady ? "tap-layer" : "tap-layer is-waiting"}
                     onPointerDown={(event) => {
                       event.preventDefault();
                       event.currentTarget.setPointerCapture(event.pointerId);
@@ -654,7 +661,17 @@ export function TryEditor() {
                   hidden={!mag || !selected.stepsOpen}
                   style={mag ? { left: mag.x + 16, top: mag.y - 80 } : undefined}
                 />
+                {!frameReady && !playbackError ? (
+                  <p className="loading-clip" role="status">
+                    Loading clip…
+                  </p>
+                ) : null}
               </div>
+              {playbackError ? (
+                <p className="form-alert" role="alert">
+                  {CANT_PLAY_MESSAGE}
+                </p>
+              ) : null}
               <label className="scrubber">
                 <span className="visually-hidden">Scrub</span>
                 <input
