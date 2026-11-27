@@ -1,6 +1,5 @@
-import Link from "next/link";
 import { PageHero } from "@/components/PageHero";
-import { formatMonthlyPrice, pricingNotice, pricingTiers } from "@/config/pricing";
+import { formatMonthlyPrice, pricingTiers } from "@/config/pricing";
 import { pageMeta } from "@/lib/seo";
 
 export const metadata = pageMeta({
@@ -14,16 +13,12 @@ export default function PricingPage() {
   return (
     <>
       <PageHero
-        kicker={pricingNotice.kicker}
-        title="Draft tiers, not a shop"
-        lede={pricingNotice.summary}
+        kicker="Pricing"
+        title="Early pricing"
+        lede="Draft numbers. Not for sale. No checkout."
       />
       <section className="section tight">
         <div className="wrap">
-          <p className="draft-banner" role="note">
-            <strong>Early pricing.</strong> These figures can change. Nothing on this page is for
-            sale, and there is no checkout.
-          </p>
           <ul className="pricing-grid">
             {pricingTiers.map((tier) => (
               <li key={tier.id} className="price-card">
@@ -34,18 +29,10 @@ export default function PricingPage() {
                 </p>
                 <p className="allowance">{tier.allowance}</p>
                 {tier.fairUse ? <p className="fair-use">{tier.fairUse}</p> : null}
-                <p className="detail">{tier.detail}</p>
               </li>
             ))}
           </ul>
-          <div className="prose price-foot">
-            <p>A render is one finished tracer on a clip. Prices are in US dollars.</p>
-            <p>
-              The web app isn’t open, so these packs can’t be bought. The{" "}
-              <Link href="/skill">AI Skill early-access list</Link> is separate, and it doesn’t
-              ask you to pay.
-            </p>
-          </div>
+          <p className="more-line">A render is one finished tracer. US dollars.</p>
         </div>
       </section>
     </>

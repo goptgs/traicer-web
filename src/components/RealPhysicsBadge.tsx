@@ -5,8 +5,9 @@ type Props = Omit<ImgHTMLAttributes<HTMLImageElement>, "src" | "alt"> & {
 };
 
 /**
- * “Real Physics!” sticker. Replace public/brand/real-physics-badge.svg
- * to swap the art. Keep a square viewBox so this slot does not shift.
+ * Shelved. Not mounted anywhere. Put it back by rendering this component.
+ * Swap the art by replacing public/brand/real-physics-badge.svg.
+ * Keep a square viewBox so the slot does not shift.
  */
 export function RealPhysicsBadge({ alt = "Real Physics!", className, ...rest }: Props) {
   const classes = className ? `real-physics-badge ${className}` : "real-physics-badge";

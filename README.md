@@ -8,7 +8,7 @@ This is milestone 1 only: the site, the draft pricing, and the waitlist. The cli
 
 | Path | What it is |
 |---|---|
-| `/` | Home. Tagline, Real Physics badge, principles, demo-clip slots, Try it teaser. |
+| `/` | Home. Tagline, one tracer, two actions, then examples and three short steps. |
 | `/pricing` | Early pricing. No checkout. |
 | `/help` | Short answers. |
 | `/skill` | AI Skill early access. The only form. |
@@ -98,7 +98,7 @@ Do not point `traicer.golf` at this until you have looked at a preview and appro
 ## Changing copy and art
 
 - **Prices.** `src/config/pricing.ts` is the only place the draft tiers are written. The home strip and `/pricing` both read it. The AI Skill page does not.
-- **Real Physics badge.** Replace `public/brand/real-physics-badge.svg`. Keep a square viewBox so the slot does not shift. The component is `src/components/RealPhysicsBadge.tsx`.
+- **Real Physics badge.** Shelved. The component is `src/components/RealPhysicsBadge.tsx` and the art is `public/brand/real-physics-badge.svg`. It is not on any page.
 - **Demo clips.** `src/config/demo-clips.ts`. Put the still and the mp4 in `public/media/`, point `poster` at the still, and set `videoSrc`. Until `videoSrc` is set, the slot shows the poster inside a `<video>`.
 - **Wordmark and icon.** `public/brand/logos/`. Use the files as they are. Don’t recolour the wordmark.
 - **Tokens.** `src/styles/tokens.css` and `src/styles/tokens.json` are the Ice Current tokens from the brand kit.

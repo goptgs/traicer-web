@@ -47,16 +47,16 @@ export const metadata: Metadata = {
   icons: {
     icon: [
       { url: "/brand/logos/favicon.ico" },
-      { url: "/brand/logos/traicer-icon-dark-32.png", sizes: "32x32", type: "image/png" },
-      { url: "/brand/logos/traicer-icon-dark-16.png", sizes: "16x16", type: "image/png" },
+      { url: "/brand/logos/traicer-icon-light-32.png", sizes: "32x32", type: "image/png" },
+      { url: "/brand/logos/traicer-icon-light-16.png", sizes: "16x16", type: "image/png" },
     ],
-    apple: [{ url: "/brand/logos/traicer-icon-dark-180.png", sizes: "180x180" }],
+    apple: [{ url: "/brand/logos/traicer-icon-light-180.png", sizes: "180x180" }],
   },
 };
 
 export const viewport: Viewport = {
-  themeColor: "#071526",
-  colorScheme: "dark",
+  themeColor: "#ffffff",
+  colorScheme: "light",
   width: "device-width",
   initialScale: 1,
 };

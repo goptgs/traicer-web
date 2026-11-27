@@ -55,7 +55,7 @@ export const organizationJsonLd = {
   "@type": "Organization",
   name: site.name,
   url: site.url,
-  logo: `${site.url}/brand/logos/traicer-icon-dark-180.png`,
+  logo: `${site.url}/brand/logos/traicer-icon-light-180.png`,
   description: site.description,
   parentOrganization: {
     "@type": "Organization",

@@ -5,7 +5,6 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 
 const links = [
-  { href: "/#try", label: "Try it" },
   { href: "/pricing", label: "Pricing" },
   { href: "/help", label: "Help" },
   { href: "/skill", label: "AI Skill" },
@@ -33,15 +32,13 @@ export function Header() {
     return () => document.removeEventListener("keydown", onKey);
   }, [open]);
 
-  const earlyHref = pathname === "/skill" ? "#early-access" : "/skill#early-access";
-
   return (
     <header className="site-header">
       <div className="wrap site-header-inner">
         <Link href="/" className="wordmark-link">
           <img
             className="wordmark"
-            src="/brand/logos/traicer-wordmark-dark-nobg.svg"
+            src="/brand/logos/traicer-wordmark-light-tight.svg"
             alt="TrAIcer"
             width={423}
             height={192}
@@ -67,9 +64,6 @@ export function Header() {
               {link.label}
             </Link>
           ))}
-          <Link href={earlyHref} className="btn btn-primary btn-sm" onClick={() => setOpen(false)}>
-            Early access
-          </Link>
         </nav>
       </div>
     </header>

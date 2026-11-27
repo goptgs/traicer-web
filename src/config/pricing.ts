@@ -1,6 +1,6 @@
 /**
  * Draft web-app prices. Change them here only — the pricing page and the
- * home-page strip both read this file. The AI Skill page must not.
+ * the pricing page reads this file. The AI Skill page must not.
  * Nothing here is for sale yet. There is no checkout in M1.
  */
 export const pricingNotice = {

@@ -8,7 +8,7 @@ export function Footer() {
         <div>
           <img
             className="wordmark"
-            src="/brand/logos/traicer-wordmark-dark-nobg.svg"
+            src="/brand/logos/traicer-wordmark-light-tight.svg"
             alt=""
             width={423}
             height={192}

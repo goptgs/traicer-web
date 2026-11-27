@@ -30,8 +30,8 @@ export default function HelpPage() {
       <JsonLd data={faqJsonLd} />
       <PageHero
         kicker="Help"
-        title="Short answers"
-        lede="What it does, what a clip needs, and what isn’t open yet. If we haven’t tried it, we don’t claim it."
+        title="Help"
+        lede="What it does, and what isn’t open yet."
       />
       <section className="section tight">
         <div className="wrap">
