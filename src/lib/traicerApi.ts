@@ -45,6 +45,8 @@ export type Job = {
   trajectory?: unknown;
   trajectoryUrl?: string;
   vertical?: VerticalOutput;
+  fitId?: string;
+  trackedFrames?: number;
 };
 
 export type UploadTicket = {
@@ -53,12 +55,17 @@ export type UploadTicket = {
   key: string;
 };
 
+export type HandleInput = { x: number; y: number; t?: number };
+
 export type RenderInput = {
-  landing: NormPoint;
+  landing?: NormPoint;
   ball?: NormPoint;
-  hangTime: number;
-  shape: ShotShape;
+  hangTime?: number;
+  landingTime?: number;
   impactTime?: number;
+  apex?: HandleInput;
+  end?: HandleInput;
+  fitId?: string;
   /** Line colour for the rendered MP4s, "#RRGGBB". The API defaults to Ice #2EE8FF. */
   color?: string;
   /** [] is trajectory only. Omit nothing: the editor always sends this. */
@@ -116,6 +123,32 @@ export function contentRect(element: Box, videoWidth: number, videoHeight: numbe
     top: element.top + (element.height - height) / 2,
     width,
     height,
+  };
+}
+
+/**
+ * Intrinsic-pixel sample for a 4× loupe. Width and height use one scale, so a
+ * 16:9 frame is not stretched into the square magnifier.
+ */
+export function magnifierSample(
+  point: NormPoint,
+  videoWidth: number,
+  videoHeight: number,
+  contentWidth: number,
+  contentHeight: number,
+  viewSize: number,
+  zoom = 4,
+): { sx: number; sy: number; srcW: number; srcH: number } | null {
+  if (videoWidth <= 0 || videoHeight <= 0 || contentWidth <= 0 || contentHeight <= 0 || viewSize <= 0 || zoom <= 0) {
+    return null;
+  }
+  const scale = Math.min(contentWidth / videoWidth, contentHeight / videoHeight);
+  const src = viewSize / (zoom * scale);
+  return {
+    sx: point.x * videoWidth - src / 2,
+    sy: point.y * videoHeight - src / 2,
+    srcW: src,
+    srcH: src,
   };
 }
 
@@ -239,6 +272,8 @@ export async function getJob(base: string, jobId: string, fetchImpl: typeof fetc
     error: typeof body.error === "string" ? body.error : undefined,
     errorCode: typeof body.errorCode === "string" ? body.errorCode : undefined,
     ball: isPoint(body.ball) ? body.ball : undefined,
+    fitId: typeof body.fitId === "string" ? body.fitId : undefined,
+    trackedFrames: typeof body.trackedFrames === "number" ? body.trackedFrames : undefined,
     trajectory: body.trajectory,
     trajectoryUrl: typeof body.trajectoryUrl === "string" ? body.trajectoryUrl : undefined,
     vertical:
@@ -260,8 +295,9 @@ function isPoint(value: unknown): value is NormPoint {
 
 export function friendlyJobError(code: string | undefined, fallback: string): string {
   if (code === "BALL_NOT_FOUND") return "We couldn't find the ball. Tap nearer to it and trace again.";
-  if (code === "BALL_NOT_TRACKED") return "We lost the ball in flight. Move the landing, or pick another shape.";
+  if (code === "BALL_NOT_TRACKED") return "We lost the ball in flight. Move the landing, or change the hang time.";
   if (code === "RENDER_FAILED") return "The export didn't finish. Press Render to try again.";
+  if (code === "FIT_NOT_FOUND") return "That curve expired. Updating it and trying again.";
   return fallback;
 }
 

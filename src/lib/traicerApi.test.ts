@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { contentTypeFor, framePoint, readTraicerApiBase, shotShape } from "./traicerApi.ts";
+import { contentTypeFor, framePoint, magnifierSample, readTraicerApiBase, shotShape } from "./traicerApi.ts";
 
 describe("readTraicerApiBase", () => {
   it("fails closed when the env var is missing or still the example", () => {
@@ -50,6 +50,17 @@ describe("framePoint", () => {
     const element = { left: 100, top: 50, width: 400, height: 400 };
     assert.equal(framePoint(200, 60, element, 1600, 900), null);
     assert.deepEqual(framePoint(100, 250, element, 1600, 900), { x: 0, y: 0.5 });
+  });
+});
+
+describe("magnifierSample", () => {
+  it("scales x and y by the same factor", () => {
+    const sample = magnifierSample({ x: 0.5, y: 0.4 }, 1920, 1080, 640, 360, 160, 4);
+    assert.ok(sample);
+    assert.equal(sample.srcW, sample.srcH);
+    const stretched = { srcW: 1920 / 4, srcH: 1080 / 4 };
+    assert.notEqual(stretched.srcW, stretched.srcH);
+    assert.ok(Math.abs(sample.srcW - 120) < 1e-9);
   });
 });
 

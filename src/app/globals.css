@@ -1367,6 +1367,53 @@ input:-webkit-autofill {
   pointer-events: none;
 }
 
+.handle-layer {
+  position: absolute;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.handle {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  border-radius: 50%;
+  border: 2px solid #ffffff;
+  padding: 0;
+  touch-action: none;
+  pointer-events: auto;
+  cursor: grab;
+}
+
+.handle.is-apex {
+  background: #2ee8ff;
+}
+
+.handle.is-end {
+  background: #0a1a2c;
+}
+
+.handle.is-impact {
+  background: transparent;
+  pointer-events: none;
+}
+
+.marker.is-impact {
+  background: transparent;
+  border-color: #ffffff;
+}
+
+.text-link {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--tr-ice-deep);
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+}
+
 .editor-controls {
   display: grid;
   gap: 14px;

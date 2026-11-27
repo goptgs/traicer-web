@@ -7,30 +7,51 @@ import {
   MAX_CLIP_BYTES,
   MAX_CLIP_SECONDS,
   MISSING_API_MESSAGE,
-  SHOT_COLS,
-  SHOT_ROWS,
   contentRect,
   contentTypeFor,
   createUpload,
   framePoint,
   friendlyJobError,
   getJob,
+  magnifierSample,
   putFile,
   readTraicerApiBase,
-  shotShape,
   startRender,
   apiColour,
   statusLine,
   type Job,
   type NormPoint,
   type OutputFormat,
-  type ShotShape,
+  type RenderInput,
 } from "@/lib/traicerApi";
+import {
+  arcPoints,
+  curveHandles,
+  dragApex,
+  dragEnd,
+  readServerCurve,
+  type ArcModel,
+  type CurveHandles,
+  type Limits,
+} from "@/lib/traicerArc";
 import { CANT_PLAY_MESSAGE, PROBE_WAIT_MS, playbackGaveUp, probeDuration } from "@/lib/probeClip";
 import { parseTrajectory, rowsUntil, trailOpacity, type Trajectory } from "@/lib/trajectory";
 
-type Tool = "ball" | "landing";
-type Points = { ball: NormPoint | null; landing: NormPoint | null };
+type Tool = "ball" | "impact" | "landing";
+type Points = { ball: NormPoint | null; impact: NormPoint | null; landing: NormPoint | null };
+type Busy = "trace" | "update" | "render" | null;
+
+type CurveSnapshot = {
+  trajectory: Trajectory;
+  arcModel: ArcModel | null;
+  handles: CurveHandles | null;
+  limits: Limits | null;
+  fitId: string | null;
+  hang: number;
+  trackedFrames: number | null;
+  landing: NormPoint | null;
+  landingTime: number | null;
+};
 type UploadState = "uploading" | "done" | "error";
 type Phase = "mark" | "drafting" | "draft" | "rendering" | "done" | "error";
 
@@ -46,9 +67,19 @@ type Clip = {
   uploadProgress: number;
   uploadError: string | null;
   points: Points;
+  impactTime: number | null;
+  landingTime: number | null;
   hang: number;
-  shape: ShotShape;
+  hangOverride: boolean;
   colour: string;
+  busy: Busy;
+  fitId: string | null;
+  trackedFrames: number | null;
+  arcModel: ArcModel | null;
+  limits: Limits | null;
+  handles: CurveHandles | null;
+  preview: ArcModel | null;
+  firstDraft: CurveSnapshot | null;
   phase: Phase;
   job: Job | null;
   trajectory: Trajectory | null;
@@ -66,8 +97,6 @@ const SWATCHES = [
   { name: "Red", hex: "#FF5C76" },
 ] as const;
 
-const ROW_LABEL = { high: "High", mid: "Mid", low: "Low" } as const;
-const COL_LABEL = { draw: "Draw", straight: "Straight", fade: "Fade" } as const;
 const GRID = 4;
 
 function sleep(ms: number) {
@@ -88,13 +117,16 @@ function clock(seconds: number): string {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 
-async function loadTrajectory(job: Job): Promise<Trajectory | null> {
-  const inline = parseTrajectory(job.trajectory);
-  if (inline) return inline;
-  if (!job.trajectoryUrl) return null;
+async function loadTrajectory(job: Job): Promise<{ trajectory: Trajectory | null; raw: unknown }> {
+  if (job.trajectory) {
+    const trajectory = parseTrajectory(job.trajectory);
+    if (trajectory) return { trajectory, raw: job.trajectory };
+  }
+  if (!job.trajectoryUrl) return { trajectory: null, raw: null };
   const response = await fetch(job.trajectoryUrl);
-  if (!response.ok) return null;
-  return parseTrajectory(await response.json());
+  if (!response.ok) return { trajectory: null, raw: null };
+  const raw = await response.json();
+  return { trajectory: parseTrajectory(raw), raw };
 }
 
 export function TryEditor() {
@@ -105,6 +137,7 @@ export function TryEditor() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const magRef = useRef<HTMLCanvasElement>(null);
   const resultRef = useRef<HTMLDivElement>(null);
+  const hangTouched = useRef(false);
   const tokens = useRef<Record<string, number>>({});
   const aborts = useRef<Record<string, () => void>>({});
 
@@ -218,27 +251,45 @@ export function TryEditor() {
       const trajectory = clip.trajectory;
       if (!trajectory) return;
       const now = video.currentTime || 0;
-      const rows = rowsUntil(trajectory, now);
-      const alpha = trailOpacity(now, trajectory.landingTime, trajectory.holdAfterLanding, trajectory.fadeDuration);
-      if (rows.length > 1 && alpha > 0) {
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      const paint = (pts: Array<{ x: number; y: number }>, colour: string, alpha: number, width: number) => {
+        if (pts.length < 2 || alpha <= 0) return;
         ctx.globalAlpha = alpha;
-        ctx.strokeStyle = clip.colour;
-        ctx.lineCap = "round";
-        ctx.lineJoin = "round";
+        ctx.strokeStyle = colour;
+        ctx.lineWidth = width;
         ctx.beginPath();
-        rows.forEach((row, index) => {
-          const x = row.x * box.width;
-          const y = row.y * box.height;
+        pts.forEach((pt, index) => {
+          const x = pt.x * box.width;
+          const y = pt.y * box.height;
           if (index === 0) ctx.moveTo(x, y);
           else ctx.lineTo(x, y);
         });
-        const width = 2 + (rows[rows.length - 1]?.widthFactor ?? 1) * 3;
-        ctx.lineWidth = width;
         ctx.stroke();
         ctx.globalAlpha = 1;
+      };
+      if (clip.preview && clip.arcModel) {
+        paint(
+          arcPoints(clip.arcModel).map((row) => ({ x: row[1], y: row[2] })),
+          clip.colour,
+          0.28,
+          2,
+        );
+        paint(
+          arcPoints(clip.preview).map((row) => ({ x: row[1], y: row[2] })),
+          clip.colour,
+          1,
+          3,
+        );
+      } else {
+        const rows = rowsUntil(trajectory, now);
+        const alpha = trailOpacity(now, trajectory.landingTime, trajectory.holdAfterLanding, trajectory.fadeDuration);
+        paint(rows, clip.colour, alpha, 2 + (rows[rows.length - 1]?.widthFactor ?? 1) * 3);
       }
-      if (clip.portrait && rows.length) {
-        const ball = rows[rows.length - 1];
+      const guide = clip.preview ? arcPoints(clip.preview) : null;
+      const head = guide?.length ? { x: guide[guide.length - 1][1], y: guide[guide.length - 1][2] } : rowsUntil(trajectory, now).at(-1);
+      if (clip.portrait && head) {
+        const ball = head;
         const cropW = Math.min(box.width, box.height * (9 / 16));
         const cx = ball.x * box.width;
         const left = Math.min(box.width - cropW, Math.max(0, cx - cropW / 2));
@@ -256,60 +307,115 @@ export function TryEditor() {
     return () => window.cancelAnimationFrame(frame);
   }, [selected]);
 
-  async function poll(clipId: string, jobId: string, token: number, exporting: boolean) {
-    if (!base) return;
+  function outputsFor(clip: Clip): OutputFormat[] {
+    return clip.portrait ? ["mp4", "mp4_9x16"] : ["mp4"];
+  }
+
+  function draftInput(clip: Clip, handles?: CurveHandles | null): RenderInput {
+    const landing = handles ? { x: handles.end.x, y: handles.end.y } : clip.points.landing;
+    const body: RenderInput = { outputs: [], color: apiColour(clip.colour) };
+    if (landing) body.landing = landing;
+    const ball = clip.points.impact ?? clip.points.ball;
+    if (ball) body.ball = ball;
+    if (clip.points.impact && clip.impactTime != null) body.impactTime = clip.impactTime;
+    if (handles) {
+      body.apex = { x: handles.apex.x, y: handles.apex.y, t: handles.apex.t };
+      body.end = { x: handles.end.x, y: handles.end.y, t: handles.end.t };
+    } else if (clip.hangOverride) {
+      body.hangTime = clip.hang;
+    } else if (clip.landingTime != null) {
+      body.landingTime = clip.landingTime;
+    } else {
+      body.hangTime = clip.hang;
+    }
+    return body;
+  }
+
+  async function poll(clipId: string, jobId: string, token: number, kind: Exclude<Busy, null>): Promise<{ job: Job; fitId: string | null } | null> {
+    if (!base) return null;
+    const exporting = kind === "render";
     for (;;) {
-      if (tokens.current[clipId] !== token) return;
+      if (tokens.current[clipId] !== token) return null;
       const job = await getJob(base, jobId);
-      if (tokens.current[clipId] !== token) return;
-      const trajectory = job.status === "done" ? await loadTrajectory(job) : null;
-      if (tokens.current[clipId] !== token) return;
-      patch(clipId, (clip) => ({
-        ...clip,
-        job,
-        trajectory: trajectory ?? clip.trajectory,
-        snappedBall: job.ball ?? clip.snappedBall,
-        phase: job.status === "done" ? (exporting ? "done" : "draft") : job.status === "error" ? "error" : clip.phase,
-        stepsOpen: exporting && job.status === "done" ? false : clip.stepsOpen,
-      }));
-      if (job.status === "done") return;
-      if (job.status === "error") return;
+      if (tokens.current[clipId] !== token) return null;
+      const loaded = job.status === "done" ? await loadTrajectory(job) : null;
+      if (tokens.current[clipId] !== token) return null;
+      let fitId: string | null = null;
+      patch(clipId, (clip) => {
+        const curve = loaded ? readServerCurve(loaded.raw) : null;
+        const trajectory = loaded?.trajectory ?? clip.trajectory;
+        fitId = curve?.fitId ?? job.fitId ?? clip.fitId;
+        const hang = curve?.impliedHang ?? trajectory?.hangTime ?? clip.hang;
+        const landing = curve?.handles ? { x: curve.handles.end.x, y: curve.handles.end.y } : clip.points.landing;
+        const snapshot: CurveSnapshot | null =
+          trajectory && curve
+            ? {
+                trajectory,
+                arcModel: curve.arcModel,
+                handles: curve.handles,
+                limits: curve.limits,
+                fitId,
+                hang,
+                trackedFrames: curve.trackedFrames,
+                landing,
+                landingTime: curve.handles?.end.t ?? clip.landingTime,
+              }
+            : null;
+        const fresh = job.status === "done" && kind !== "render" && kind !== "update";
+        return {
+          ...clip,
+          job,
+          trajectory,
+          snappedBall: job.ball ?? clip.snappedBall,
+          phase: job.status === "done" ? (exporting ? "done" : "draft") : job.status === "error" ? "error" : clip.phase,
+          stepsOpen: exporting && job.status === "done" ? false : clip.stepsOpen,
+          busy: job.status === "done" || job.status === "error" ? null : kind,
+          fitId,
+          trackedFrames: curve?.trackedFrames ?? (typeof job.trackedFrames === "number" ? job.trackedFrames : clip.trackedFrames),
+          arcModel: job.status === "done" && !exporting && curve ? curve.arcModel : clip.arcModel,
+          limits: job.status === "done" && !exporting && curve?.limits ? curve.limits : clip.limits,
+          handles: job.status === "done" && !exporting && curve ? curve.handles : clip.handles,
+          preview: job.status === "done" && !exporting ? null : clip.preview,
+          hang: job.status === "done" && !exporting ? hang : clip.hang,
+          hangOverride: job.status === "done" && !exporting ? false : clip.hangOverride,
+          points:
+            job.status === "done" && kind === "update" && curve?.handles
+              ? { ...clip.points, landing: { x: curve.handles.end.x, y: curve.handles.end.y } }
+              : clip.points,
+          firstDraft: clip.firstDraft ?? (fresh ? snapshot : null),
+        };
+      });
+      if (job.status === "done" || job.status === "error") return { job, fitId };
       await sleep(2000);
     }
   }
 
-  async function begin(clip: Clip, outputs: OutputFormat[]) {
-    if (!base || !clip.jobId || !clip.points.landing) return;
-    const exporting = outputs.length > 0;
-    if (exporting) {
+  async function run(clip: Clip, input: RenderInput, kind: Exclude<Busy, null>) {
+    if (!base || !clip.jobId) return null;
+    if (kind === "render") {
       const decision = requestExport(clip.id);
       if (!decision.allowed) {
         setUpgrade(decision.reason);
-        return;
+        return null;
       }
     }
     const token = (tokens.current[clip.id] ?? 0) + 1;
     tokens.current[clip.id] = token;
     patch(clip.id, (current) => ({
       ...current,
-      phase: exporting ? "rendering" : "drafting",
+      phase: kind === "render" ? "rendering" : kind === "trace" ? "drafting" : current.phase,
+      busy: kind,
       job: null,
     }));
     try {
-      await startRender(base, clip.jobId, {
-        landing: clip.points.landing,
-        ball: clip.points.ball ?? undefined,
-        hangTime: clip.hang,
-        shape: clip.shape,
-        color: apiColour(clip.colour),
-        outputs,
-      });
-      await poll(clip.id, clip.jobId, token, exporting);
+      await startRender(base, clip.jobId, input);
+      return await poll(clip.id, clip.jobId, token, kind);
     } catch (error) {
-      if (tokens.current[clip.id] !== token) return;
+      if (tokens.current[clip.id] !== token) return null;
       patch(clip.id, (current) => ({
         ...current,
         phase: "error",
+        busy: null,
         job: {
           status: "error",
           progress: 0,
@@ -317,6 +423,36 @@ export function TryEditor() {
           error: plainError(error, "The tracer didn't finish."),
         },
       }));
+      return null;
+    }
+  }
+
+  async function traceClip(clip: Clip) {
+    if (!clip.points.landing) return;
+    await run(clip, draftInput(clip), "trace");
+  }
+
+  async function updateCurve(clip: Clip) {
+    if (!clip.preview) return;
+    await run(clip, draftInput(clip, curveHandles(clip.preview)), "update");
+  }
+
+  async function renderClip(clip: Clip, allowRetry = true) {
+    if (!clip.fitId || clip.preview) return;
+    const result = await run(
+      clip,
+      { fitId: clip.fitId, outputs: outputsFor(clip), color: apiColour(clip.colour) },
+      "render",
+    );
+    if (result?.job.errorCode === "FIT_NOT_FOUND" && allowRetry && clip.handles) {
+      const updated = await run(clip, draftInput(clip, clip.handles), "update");
+      if (updated?.fitId) {
+        await run(
+          { ...clip, fitId: updated.fitId, preview: null },
+          { fitId: updated.fitId, outputs: outputsFor(clip), color: apiColour(clip.colour) },
+          "render",
+        );
+      }
     }
   }
 
@@ -351,10 +487,20 @@ export function TryEditor() {
         upload: "uploading",
         uploadProgress: 0,
         uploadError: null,
-        points: { ball: null, landing: null },
+        points: { ball: null, impact: null, landing: null },
+        impactTime: null,
+        landingTime: null,
         hang: 6,
-        shape: "mid-straight",
+        hangOverride: false,
         colour: "#2EE8FF",
+        busy: null,
+        fitId: null,
+        trackedFrames: null,
+        arcModel: null,
+        limits: null,
+        handles: null,
+        preview: null,
+        firstDraft: null,
         phase: "mark",
         job: null,
         trajectory: null,
@@ -411,10 +557,12 @@ export function TryEditor() {
       video.videoHeight,
     );
     if (!point) return;
-    patch(clip.id, (current) => ({
-      ...current,
-      points: tool === "ball" ? { ...current.points, ball: point } : { ...current.points, landing: point },
-    }));
+    const at = video.currentTime;
+    patch(clip.id, (current) => {
+      if (tool === "ball") return { ...current, points: { ...current.points, ball: point } };
+      if (tool === "impact") return { ...current, points: { ...current.points, impact: point }, impactTime: at };
+      return { ...current, points: { ...current.points, landing: point }, landingTime: at, hangOverride: false };
+    });
     if (zoom) setZoom(null);
   }
 
@@ -440,14 +588,13 @@ export function TryEditor() {
     if (!stage) return;
     setMag({ x: event.clientX - stage.left, y: event.clientY - stage.top });
     const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const srcW = video.videoWidth / 4;
-    const srcH = video.videoHeight / 4;
-    const sx = point.x * video.videoWidth - srcW / 2;
-    const sy = point.y * video.videoHeight - srcH / 2;
+    const box = measureContent();
+    if (!ctx || !box) return;
+    const sample = magnifierSample(point, video.videoWidth, video.videoHeight, box.width, box.height, canvas.clientWidth || canvas.width, 4);
+    if (!sample) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     try {
-      ctx.drawImage(video, sx, sy, srcW, srcH, 0, 0, canvas.width, canvas.height);
+      ctx.drawImage(video, sample.sx, sample.sy, sample.srcW, sample.srcH, 0, 0, canvas.width, canvas.height);
     } catch {
       setMag(null);
     }
@@ -457,9 +604,19 @@ export function TryEditor() {
     tokens.current[id] = -1;
     patch(id, (clip) => ({
       ...clip,
-      points: { ball: null, landing: null },
+      points: { ball: null, impact: null, landing: null },
+      impactTime: null,
+      landingTime: null,
       hang: 6,
-      shape: "mid-straight",
+      hangOverride: false,
+      busy: null,
+      fitId: null,
+      trackedFrames: null,
+      arcModel: null,
+      limits: null,
+      handles: null,
+      preview: null,
+      firstDraft: null,
       phase: "mark",
       job: null,
       trajectory: null,
@@ -469,10 +626,49 @@ export function TryEditor() {
     setResetId(null);
   }
 
+  function moveHandle(kind: "apex" | "end", event: PointerEvent<HTMLElement>) {
+    const video = videoRef.current;
+    const clip = selected;
+    if (!video || !clip?.arcModel) return;
+    const point = framePoint(event.clientX, event.clientY, video.getBoundingClientRect(), video.videoWidth, video.videoHeight);
+    if (!point) return;
+    const next = kind === "apex" ? dragApex(clip.arcModel, point.x, point.y, clip.limits ?? undefined) : dragEnd(clip.arcModel, point.x, point.y, clip.limits ?? undefined);
+    const moved = curveHandles(next);
+    patch(clip.id, (current) => ({
+      ...current,
+      preview: next,
+      hang: next.T,
+      points: kind === "end" ? { ...current.points, landing: { x: moved.end.x, y: moved.end.y } } : current.points,
+    }));
+  }
+
+  function resetShape(id: string) {
+    patch(id, (clip) => {
+      if (!clip.firstDraft) return clip;
+      const saved = clip.firstDraft;
+      return {
+        ...clip,
+        trajectory: saved.trajectory,
+        arcModel: saved.arcModel,
+        handles: saved.handles,
+        limits: saved.limits,
+        fitId: saved.fitId,
+        hang: saved.hang,
+        trackedFrames: saved.trackedFrames,
+        hangOverride: false,
+        preview: null,
+        busy: null,
+        points: { ...clip.points, landing: saved.landing },
+        landingTime: saved.landingTime,
+        phase: clip.phase === "done" ? "draft" : clip.phase,
+      };
+    });
+  }
+
   function traceAll() {
     for (const clip of clips) {
-      if (clip.upload === "done" && clip.points.landing && clip.phase !== "drafting" && clip.phase !== "rendering") {
-        void begin(clip, []);
+      if (clip.upload === "done" && clip.points.landing && clip.phase !== "drafting" && clip.phase !== "rendering" && !clip.busy) {
+        void traceClip(clip);
       }
     }
   }
@@ -487,8 +683,6 @@ export function TryEditor() {
       </div>
     );
   }
-
-  const outputs = (clip: Clip): OutputFormat[] => (clip.portrait ? ["mp4", "mp4_9x16"] : ["mp4"]);
 
   return (
     <div className="wrap try-page">
@@ -634,6 +828,13 @@ export function TryEditor() {
                           style={{ left: `${selected.snappedBall.x * 100}%`, top: `${selected.snappedBall.y * 100}%` }}
                         />
                       ) : null}
+                      {selected.points.impact ? (
+                        <i
+                          className="marker is-impact"
+                          title="Impact"
+                          style={{ left: `${selected.points.impact.x * 100}%`, top: `${selected.points.impact.y * 100}%` }}
+                        />
+                      ) : null}
                       {selected.points.landing ? (
                         <i
                           className="marker is-landing"
@@ -652,6 +853,29 @@ export function TryEditor() {
                     onPointerMove={drawMagnifier}
                     onPointerLeave={() => setMag(null)}
                   />
+                  {content
+                    ? (() => {
+                        const shown = selected.preview ? curveHandles(selected.preview) : selected.handles;
+                        if (!shown) return null;
+                        const bind = (kind: "apex" | "end") => ({
+                          onPointerDown: (event: PointerEvent<HTMLButtonElement>) => {
+                            event.stopPropagation();
+                            event.preventDefault();
+                            event.currentTarget.setPointerCapture(event.pointerId);
+                          },
+                          onPointerMove: (event: PointerEvent<HTMLButtonElement>) => {
+                            if (event.currentTarget.hasPointerCapture(event.pointerId)) moveHandle(kind, event);
+                          },
+                        });
+                        return (
+                          <div className="handle-layer" style={{ left: content.left, top: content.top, width: content.width, height: content.height }}>
+                            <i className="handle is-impact" title="Impact" style={{ left: `${shown.impact.x * 100}%`, top: `${shown.impact.y * 100}%` }} />
+                            <button type="button" className="handle is-apex" aria-label="Apex" style={{ left: `${shown.apex.x * 100}%`, top: `${shown.apex.y * 100}%` }} {...bind("apex")} />
+                            <button type="button" className="handle is-end" aria-label="End" style={{ left: `${shown.end.x * 100}%`, top: `${shown.end.y * 100}%` }} {...bind("end")} />
+                          </div>
+                        );
+                      })()
+                    : null}
                 </div>
                 <canvas
                   ref={magRef}
@@ -717,6 +941,9 @@ export function TryEditor() {
                     >
                       Optional, we'll find it. Tap near the ball.
                     </Step>
+                    <Step title="Impact" done={selected.impactTime != null} onEdit={() => setTool("impact")} active={tool === "impact"}>
+                      Scrub to the impact, then tap the ball.
+                    </Step>
                     <Step title="Landing" done={Boolean(selected.points.landing)} onEdit={() => setTool("landing")} active={tool === "landing"}>
                       Scrub to the landing, then tap it.
                     </Step>
@@ -730,17 +957,35 @@ export function TryEditor() {
                           step={0.1}
                           value={selected.hang}
                           onChange={(event) => {
+                            hangTouched.current = true;
                             const hang = Number(event.target.value);
-                            patch(selected.id, (clip) => ({ ...clip, hang }));
+                            patch(selected.id, (clip) => ({ ...clip, hang, hangOverride: true }));
+                          }}
+                          onPointerUp={(event) => {
+                            if (!hangTouched.current || !selected.points.landing) return;
+                            hangTouched.current = false;
+                            const hang = Number(event.currentTarget.value);
+                            void traceClip({ ...selected, hang, hangOverride: true });
+                          }}
+                          onKeyUp={(event) => {
+                            if (!hangTouched.current || !selected.points.landing) return;
+                            hangTouched.current = false;
+                            const hang = Number(event.currentTarget.value);
+                            void traceClip({ ...selected, hang, hangOverride: true });
                           }}
                         />
                       </label>
                     </Step>
-                    <Step title="Shape" done onEdit={() => undefined} active={false}>
-                      <ShapeGrid
-                        value={selected.shape}
-                        onChange={(shape) => patch(selected.id, (clip) => ({ ...clip, shape }))}
-                      />
+                    <Step title="Shape" done={Boolean(selected.trajectory)} onEdit={() => undefined} active={false}>
+                      <p>Drag the apex or end point to adjust, then press Update curve.</p>
+                      {selected.trackedFrames === 0 ? (
+                        <p className="export-note">Couldn't track the ball's start, so the start direction is estimated.</p>
+                      ) : null}
+                      {selected.firstDraft ? (
+                        <button type="button" className="text-link" onClick={() => resetShape(selected.id)}>
+                          Reset shape
+                        </button>
+                      ) : null}
                     </Step>
                   </div>
                 ) : (
@@ -748,6 +993,12 @@ export function TryEditor() {
                     <li>
                       Ball {selected.points.ball || selected.snappedBall ? "✓" : "—"}{" "}
                       <button type="button" className="edit-chip" onClick={() => { patch(selected.id, (clip) => ({ ...clip, stepsOpen: true })); setTool("ball"); }}>
+                        Edit
+                      </button>
+                    </li>
+                    <li>
+                      Impact {selected.impactTime != null ? "✓" : "—"}{" "}
+                      <button type="button" className="edit-chip" onClick={() => { patch(selected.id, (clip) => ({ ...clip, stepsOpen: true })); setTool("impact"); }}>
                         Edit
                       </button>
                     </li>
@@ -764,7 +1015,7 @@ export function TryEditor() {
                       </button>
                     </li>
                     <li>
-                      Shape {selected.shape}{" "}
+                      Shape {selected.trajectory ? "✓" : "—"}{" "}
                       <button type="button" className="edit-chip" onClick={() => patch(selected.id, (clip) => ({ ...clip, stepsOpen: true }))}>
                         Edit
                       </button>
@@ -860,14 +1111,24 @@ export function TryEditor() {
                 ) : null}
 
                 <div className="hero-actions">
+                  {selected.trajectory ? (
+                    <button
+                      type="button"
+                      className={selected.preview ? "btn btn-primary" : "btn btn-secondary"}
+                      disabled={!selected.preview || selected.busy != null}
+                      onClick={() => void updateCurve(selected)}
+                    >
+                      {selected.busy === "update" ? "Updating curve..." : "Update curve"}
+                    </button>
+                  ) : null}
                   {selected.trajectory && selected.phase !== "drafting" && selected.phase !== "rendering" ? (
                     <button
                       type="button"
                       className="btn btn-primary btn-lg"
-                      disabled={selected.upload !== "done" || !selected.points.landing}
-                      onClick={() => void begin(selected, outputs(selected))}
+                      disabled={selected.upload !== "done" || !selected.points.landing || Boolean(selected.preview) || !selected.fitId || selected.busy != null}
+                      onClick={() => void renderClip(selected)}
                     >
-                      Render
+                      {selected.busy === "render" ? "Rendering…" : "Render"}
                     </button>
                   ) : (
                     <button
@@ -877,13 +1138,15 @@ export function TryEditor() {
                         selected.upload !== "done" ||
                         !selected.points.landing ||
                         selected.phase === "drafting" ||
-                        selected.phase === "rendering"
+                        selected.phase === "rendering" ||
+                        selected.busy != null
                       }
-                      onClick={() => void begin(selected, [])}
+                      onClick={() => void traceClip(selected)}
                     >
                       {selected.phase === "rendering" ? "Rendering…" : selected.phase === "drafting" ? "Tracing…" : "Trace this clip"}
                     </button>
                   )}
+                  {selected.preview ? <p className="export-note">Update curve first</p> : null}
                   {selected.trajectory ? (
                     <button type="button" className="btn btn-secondary" onClick={() => patch(selected.id, (clip) => ({ ...clip, stepsOpen: true, phase: clip.phase === "done" ? "draft" : clip.phase }))}>
                       Redo tracer
@@ -891,6 +1154,11 @@ export function TryEditor() {
                   ) : null}
                 </div>
 
+                {selected.busy === "update" ? (
+                  <p className="trace-status" role="status">
+                    Updating curve...
+                  </p>
+                ) : null}
                 {(selected.phase === "drafting" || selected.phase === "rendering") && selected.job ? (
                   <div className="trace-status" role="status">
                     <p>{friendlyJobError(selected.job.errorCode, statusLine(selected.job))}</p>
@@ -902,7 +1170,11 @@ export function TryEditor() {
                 {selected.phase === "error" && selected.job ? (
                   <p className="form-alert" role="alert">
                     {friendlyJobError(selected.job.errorCode, selected.job.error || statusLine(selected.job))}{" "}
-                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => void begin(selected, selected.trajectory ? outputs(selected) : [])}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => void (selected.fitId && !selected.preview ? renderClip(selected) : traceClip(selected))}
+                    >
                       Retry
                     </button>
                   </p>
@@ -997,6 +1269,7 @@ export function TryEditor() {
 function clipStatus(clip: Clip): string {
   if (clip.upload === "uploading") return "Uploading";
   if (clip.upload === "error") return "Upload failed";
+  if (clip.busy === "update") return "Updating curve";
   if (clip.phase === "drafting") return "Tracing";
   if (clip.phase === "rendering") return "Rendering";
   if (clip.phase === "done") return "Ready";
@@ -1042,40 +1315,3 @@ function Step({
   );
 }
 
-function ShapeGrid({ value, onChange }: { value: ShotShape; onChange: (shape: ShotShape) => void }) {
-  return (
-    <table className="nine-box">
-      <caption className="visually-hidden">Shot shape. High draw is the top left. Low fade is the bottom right.</caption>
-      <thead>
-        <tr>
-          <th scope="col">
-            <span className="visually-hidden">Height</span>
-          </th>
-          {SHOT_COLS.map((col) => (
-            <th key={col} scope="col">
-              {COL_LABEL[col]}
-            </th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {SHOT_ROWS.map((row) => (
-          <tr key={row}>
-            <th scope="row">{ROW_LABEL[row]}</th>
-            {SHOT_COLS.map((col) => {
-              const shape = shotShape(row, col);
-              const pressed = value === shape;
-              return (
-                <td key={shape}>
-                  <button type="button" aria-pressed={pressed} aria-label={`${ROW_LABEL[row]} ${COL_LABEL[col]}`} onClick={() => onChange(shape)}>
-                    {pressed ? <span className="visually-hidden">Selected</span> : null}
-                  </button>
-                </td>
-              );
-            })}
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
