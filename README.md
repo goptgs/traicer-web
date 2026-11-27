@@ -9,7 +9,7 @@ This is milestone 1 only: the site, the draft pricing, and the waitlist. The cli
 | Path | What it is |
 |---|---|
 | `/` | Home. Tagline, one tracer, Try it Free!, and an examples window. |
-| `/try` | Static preview of the editor. Nothing is uploaded. |
+| `/try` | Editor. Uploads a clip and asks the render API to trace it. |
 | `/pricing` | Early pricing. No checkout. |
 | `/help` | Short answers. |
 | `/skill` | AI Skill early access. The only form. |
@@ -38,6 +38,7 @@ Leave the env vars blank, or leave the example values, and the waitlist form sta
 |---|---|---|
 | `NEXT_PUBLIC_SUPABASE_URL` | `.env.local`, and the host’s build env | Project URL, `https://….supabase.co` |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | same | The anon public key. Safe to expose. |
+| `NEXT_PUBLIC_TRAICER_API_URL` | same | Base URL of the render API. The browser calls it from `/try`. No secret. |
 
 The site is a static export, so these values are read **at build time** and written into the pages. Set them before `npm run build`, not only at runtime.
 
@@ -90,7 +91,7 @@ Do not point `traicer.golf` at this until you have looked at a preview and appro
 3. Build command: `npm run build`
 4. Build output directory: `out`
 5. Environment variable `NODE_VERSION` = `22` (or rely on `.node-version`).
-6. Build-time variables: `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
+6. Build-time variables: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, and `NEXT_PUBLIC_TRAICER_API_URL`.
 7. Apply the Supabase migration before you expect the form to store rows.
 8. Custom domains, and the redirects from `tracer.golf` and `shottraicer.com`, wait until the preview looks right.
 

@@ -1229,6 +1229,80 @@ input:-webkit-autofill {
   font-size: 0.875rem;
 }
 
+.stage {
+  position: relative;
+  border-radius: var(--tr-radius-lg);
+  overflow: hidden;
+  background: #071526;
+  aspect-ratio: 16 / 9;
+}
+
+.frame-video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  background: #071526;
+}
+
+.tap-layer {
+  position: absolute;
+  cursor: crosshair;
+}
+
+.scrubber input {
+  width: 100%;
+  margin-top: 8px;
+}
+
+.meter {
+  height: 8px;
+  border-radius: var(--tr-radius-pill);
+  background: var(--tr-mist);
+  overflow: hidden;
+  margin-top: 8px;
+}
+
+.meter span {
+  display: block;
+  height: 100%;
+  background: var(--tr-ice);
+}
+
+.point-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.point-tools button {
+  min-height: 44px;
+  padding: 8px 12px;
+  border-radius: var(--tr-radius-md);
+  border: 1px solid var(--tr-border);
+  background: #ffffff;
+  color: var(--tr-ink);
+  font-family: var(--tr-font-heading);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.point-tools button.is-on {
+  background: var(--tr-ice);
+  border-color: var(--tr-ice);
+}
+
+.trace-status,
+.trace-result {
+  margin-top: 20px;
+}
+
+.trace-result video {
+  width: min(720px, 100%);
+  border-radius: var(--tr-radius-lg);
+  background: #071526;
+}
+
 .frame {
   position: relative;
   border-radius: var(--tr-radius-lg);
@@ -1236,8 +1310,6 @@ input:-webkit-autofill {
   background: #071526;
   cursor: crosshair;
   aspect-ratio: 16 / 9;
-  max-height: 280px;
-  width: min(100%, 520px);
 }
 
 .frame img {

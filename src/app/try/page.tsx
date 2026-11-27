@@ -1,13 +1,13 @@
-import { TryMock } from "@/components/TryMock";
+import { TryEditor } from "@/components/TryEditor";
 import { pageMeta } from "@/lib/seo";
 
 export const metadata = pageMeta({
   title: "Try it Free",
   description:
-    "A preview of the TrAIcer editor: drop clips, mark the landing, set hang time and shot shape, preview, and export 4K. Nothing is uploaded yet.",
+    "Try TrAIcer on your own clip. Mark the landing, set hang time and shot shape, then trace it.",
   path: "/try",
 });
 
 export default function TryPage() {
-  return <TryMock />;
+  return <TryEditor />;
 }
