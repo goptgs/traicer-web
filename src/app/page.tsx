@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { DemoClips } from "@/components/DemoClips";
+import { HomeHero } from "@/components/HomeHero";
 import { site } from "@/config/site";
 import { pageMeta } from "@/lib/seo";
 
@@ -13,34 +13,7 @@ export const metadata = pageMeta({
 export default function HomePage() {
   return (
     <>
-      <section className="hero">
-        <div className="wrap hero-grid">
-          <div className="hero-copy">
-            <h1>
-              <span className="name-ai">AI</span>-powered fast, simple, reliable shot tracing.
-            </h1>
-            <p className="lede">A flight line on the golf video you already have.</p>
-            <div className="hero-actions">
-              <a className="btn btn-primary btn-lg" href="#how">
-                Try it on your clip
-              </a>
-              <a className="btn btn-secondary btn-lg" href="#examples">
-                See examples
-              </a>
-            </div>
-          </div>
-          <figure className="hero-visual">
-            <img
-              src="/media/tracer-sample.svg"
-              alt="A computed ball flight over a fairway."
-              width={1280}
-              height={720}
-            />
-          </figure>
-        </div>
-      </section>
-
-      <DemoClips />
+      <HomeHero />
 
       <section className="section tight" id="how" aria-labelledby="how-title">
         <div className="wrap">
@@ -48,7 +21,7 @@ export default function HomePage() {
           <ol className="how-steps">
             <li>
               <strong>Bring a clip</strong>
-              One swing, ball in view.
+              One swing, or a batch.
             </li>
             <li>
               <strong>Mark the shot</strong>

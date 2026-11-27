@@ -8,7 +8,8 @@ This is milestone 1 only: the site, the draft pricing, and the waitlist. The cli
 
 | Path | What it is |
 |---|---|
-| `/` | Home. Tagline, one tracer, two actions, then examples and three short steps. |
+| `/` | Home. Tagline, one tracer, Try it Free!, and an examples window. |
+| `/try` | Static preview of the editor. Nothing is uploaded. |
 | `/pricing` | Early pricing. No checkout. |
 | `/help` | Short answers. |
 | `/skill` | AI Skill early access. The only form. |
