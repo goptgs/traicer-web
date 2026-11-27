@@ -19,6 +19,7 @@ import {
   readTraicerApiBase,
   shotShape,
   startRender,
+  apiColour,
   statusLine,
   type Job,
   type NormPoint,
@@ -303,6 +304,7 @@ export function TryEditor() {
         ball: clip.points.ball ?? undefined,
         hangTime: clip.hang,
         shape: clip.shape,
+        color: apiColour(clip.colour),
         outputs,
       });
       await poll(clip.id, clip.jobId, token, exporting);

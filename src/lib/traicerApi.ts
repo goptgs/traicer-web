@@ -59,6 +59,8 @@ export type RenderInput = {
   hangTime: number;
   shape: ShotShape;
   impactTime?: number;
+  /** Line colour for the rendered MP4s, "#RRGGBB". The API defaults to Ice #2EE8FF. */
+  color?: string;
   /** [] is trajectory only. Omit nothing: the editor always sends this. */
   outputs: OutputFormat[];
 };
@@ -196,6 +198,14 @@ export function putFile(
     xhr.send(file);
   });
   return { done, abort: () => xhr.abort() };
+}
+
+const HEX_COLOUR = /^#?[0-9a-fA-F]{6}$/;
+
+/** "#rrggbb" for the API, or undefined (API default) when the value isn't a 6-digit hex. */
+export function apiColour(value: string | null | undefined): string | undefined {
+  const v = value?.trim() ?? "";
+  return HEX_COLOUR.test(v) ? `#${v.replace(/^#/, "").toUpperCase()}` : undefined;
 }
 
 export async function startRender(
