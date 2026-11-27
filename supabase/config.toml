@@ -1,0 +1,24 @@
+# Edge Functions verify the caller themselves.
+# verify_jwt stays off so Stripe (no Supabase JWT) and the render API
+# (shared secret) can reach their functions. User functions reject a
+# missing or invalid user JWT in code.
+
+project_id = "traicer"
+
+[functions.create-checkout-session]
+verify_jwt = false
+
+[functions.create-portal-session]
+verify_jwt = false
+
+[functions.stripe-webhook]
+verify_jwt = false
+
+[functions.consume-export]
+verify_jwt = false
+
+[functions.authorize-render]
+verify_jwt = false
+
+[functions.billing-catalog]
+verify_jwt = false
