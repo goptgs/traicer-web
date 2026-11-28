@@ -43,5 +43,7 @@ describe("advanceStep", () => {
     assert.equal(advanceStep("impact", "impact"), "landing");
     assert.equal(advanceStep("landing", "ball"), "landing");
     assert.equal(advanceStep("shape", "impact"), "shape");
+    assert.equal(advanceStep("landing", "draft"), "shape");
+    assert.equal(advanceStep("shape", "draft"), "shape");
   });
 });

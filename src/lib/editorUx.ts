@@ -35,9 +35,10 @@ export function medianFps(deltas: number[]): number | null {
   return mid > 0 ? 1 / mid : null;
 }
 
-export function advanceStep(step: MarkStep, reason: "ball" | "impact"): MarkStep {
+export function advanceStep(step: MarkStep, reason: "ball" | "impact" | "draft"): MarkStep {
   if (reason === "ball" && step === "ball") return "impact";
   if (reason === "impact" && step === "impact") return "landing";
+  if (reason === "draft" && step === "landing") return "shape";
   return step;
 }
 

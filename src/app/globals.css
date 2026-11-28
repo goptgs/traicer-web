@@ -1545,6 +1545,10 @@ input:-webkit-autofill {
   align-items: stretch;
 }
 
+.clip-index {
+  display: none;
+}
+
 .clip-list li button.clip-select {
   flex: 1;
   min-width: 0;
@@ -1865,8 +1869,14 @@ input:-webkit-autofill {
     grid-template-columns: 72px minmax(0, 1fr);
   }
 
+  .edit-layout.is-focus .clip-list {
+    overflow: hidden;
+    min-width: 0;
+  }
+
   .edit-layout.is-focus .clip-list h2,
-  .edit-layout.is-focus .clip-list span {
+  .edit-layout.is-focus .clip-name,
+  .edit-layout.is-focus .clip-list .clip-select span:not(.clip-index) {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -1874,12 +1884,43 @@ input:-webkit-autofill {
     clip: rect(0, 0, 0, 0);
   }
 
-  .edit-layout.is-focus .clip-select strong {
+  .edit-layout.is-focus .clip-list li {
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .edit-layout.is-focus .clip-select {
+    padding: 8px 4px;
+    text-align: center;
+  }
+
+  .edit-layout.is-focus .clip-index {
     display: block;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 0.75rem;
+    font-family: var(--tr-font-heading);
+    font-weight: 700;
+  }
+
+  .edit-layout.is-focus .clip-remove {
+    width: 100%;
+    height: 28px;
+  }
+
+  .edit-layout.is-focus .clip-list .btn {
+    width: 100%;
+    min-width: 0;
+    padding: 8px 4px;
+    white-space: normal;
+  }
+
+  .edit-layout.is-focus .stage-column {
+    min-width: 0;
+    position: relative;
+    z-index: 1;
+  }
+
+  .edit-layout.is-focus .step-prompt {
+    position: relative;
+    z-index: 1;
   }
 
   .edit-layout.is-focus .edit-main {

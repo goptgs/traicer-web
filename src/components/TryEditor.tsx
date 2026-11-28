@@ -437,7 +437,10 @@ export function TryEditor() {
           firstDraft: clip.firstDraft ?? (fresh ? snapshot : null),
         };
       });
-      if (job.status === "done" && job.ball && clipId === selectedId) setTool((step) => advanceStep(step, "ball"));
+      if (job.status === "done" && clipId === selectedId) {
+        if (job.ball) setTool((step) => advanceStep(step, "ball"));
+        if (kind === "trace") setTool((step) => advanceStep(step, "draft"));
+      }
       if (job.status === "done" || job.status === "error") return { job, fitId };
       await sleep(2000);
     }
@@ -815,20 +818,22 @@ export function TryEditor() {
           <aside className="clip-list">
             <h2>Clips ({clips.length})</h2>
             <ul>
-              {clips.map((clip) => (
+              {clips.map((clip, index) => (
                 <li key={clip.id}>
                   <button
                     type="button"
                     className="clip-select"
+                    title={clip.name}
                     aria-current={clip.id === selectedId ? "true" : undefined}
                     onClick={() => setSelectedId(clip.id)}
                   >
-                    <strong>{clip.name}</strong>
+                    <strong className="clip-name">{clip.name}</strong>
+                    <span className="clip-index">{index + 1}</span>
                     <span>
                       {clock(clip.duration)} · {clipStatus(clip)}
                     </span>
                   </button>
-                  <button type="button" className="clip-remove" aria-label={`Remove ${clip.name}`} onClick={() => deleteClip(clip.id)}>
+                  <button type="button" className="clip-remove" title={clip.name} aria-label={`Remove ${clip.name}`} onClick={() => deleteClip(clip.id)}>
                     ×
                   </button>
                 </li>
