@@ -76,7 +76,13 @@ test.beforeAll(() => {
   execFileSync("cp", [clipPath, "out/e2e-clip.mp4"]);
 });
 
-async function installApi(page: Page, bodies: unknown[]) {
+async function installApi(page: Page, bodies: unknown[], holdPut = false) {
+  let releasePut = () => {};
+  const putReady = holdPut
+    ? new Promise<void>((resolve) => {
+        releasePut = resolve;
+      })
+    : Promise.resolve();
   const fulfill = async (route: Route, body: unknown) => {
     await route.fulfill({ status: 200, contentType: "application/json", headers: cors, body: JSON.stringify(body) });
   };
@@ -88,6 +94,7 @@ async function installApi(page: Page, bodies: unknown[]) {
       return;
     }
     if (url.endsWith("/put") || url.includes("/put?")) {
+      await putReady;
       await route.fulfill({ status: 200, headers: cors, body: "" });
       return;
     }
@@ -112,6 +119,7 @@ async function installApi(page: Page, bodies: unknown[]) {
     }
     await route.continue();
   });
+  return releasePut;
 }
 
 test("marks a real clip through landing, render, shape, and a second render", async ({ page }) => {
@@ -309,4 +317,56 @@ test("119.88 fps, 492 frames: frame 308 sets landing and 10.28s is not silent", 
     marker: Boolean(document.querySelector(".marker.is-landing")),
   }));
   expect(outcome.marker || /after the impact|maximum is 10|missed the picture|not ready|still uploading/.test(`${outcome.reject} ${outcome.instruction}`)).toBeTruthy();
+});
+
+test("draft fires when the PUT finishes before landing and when landing is marked first", async ({ page, browser }) => {
+  const mark = async (target: Page) => {
+    await target.waitForFunction(() => (document.querySelector(".stage video") as HTMLVideoElement | null)?.videoWidth === 1920);
+    await target.waitForFunction(() => document.querySelector(".tap-layer") && !document.querySelector(".tap-layer.is-waiting"));
+    const box = await target.locator(".stage video").boundingBox();
+    if (!box) throw new Error("video has no box");
+    await target.mouse.click(box.x + box.width * 0.4, box.y + box.height * 0.55);
+    await target.getByRole("button", { name: "Set impact" }).click();
+    await target.evaluate(async () => {
+      const video = document.querySelector(".stage video") as HTMLVideoElement;
+      video.pause();
+      video.currentTime = 1;
+      await new Promise((resolve) => {
+        video.onseeked = () => resolve(null);
+        setTimeout(resolve, 4000);
+      });
+    });
+    await target.mouse.click(box.x + box.width * 0.62, box.y + box.height * 0.72);
+  };
+  const drafted = (bodies: unknown[]) => bodies.some((body) => JSON.stringify(body).includes('"outputs":[]'));
+
+  const early: unknown[] = [];
+  await page.addInitScript(() => localStorage.clear());
+  await installApi(page, early);
+  await page.goto("/try");
+  await page.locator("input[type=file]").setInputFiles(clipPath);
+  await page.waitForFunction(() => document.querySelector(".edit-app")?.getAttribute("data-upload") === "done");
+  await mark(page);
+  await expect(page.locator(".marker.is-landing")).toBeVisible();
+  await expect.poll(() => drafted(early)).toBe(true);
+
+  const late: unknown[] = [];
+  const context = await browser.newContext({
+    baseURL: "http://127.0.0.1:4173",
+    viewport: { width: 1280, height: 720 },
+    hasTouch: true,
+  });
+  const held = await context.newPage();
+  await held.addInitScript(() => localStorage.clear());
+  const releasePut = await installApi(held, late, true);
+  await held.goto("/try");
+  await held.locator("input[type=file]").setInputFiles(clipPath);
+  await mark(held);
+  await expect(held.locator(".marker.is-landing")).toBeVisible();
+  await expect(held.getByText("Landing is marked. The clip is still uploading, so the draft has not been sent.")).toBeVisible();
+  expect(drafted(late)).toBe(false);
+  releasePut();
+  await expect.poll(() => drafted(late)).toBe(true);
+  await expect(held.locator(".edit-app")).toHaveAttribute("data-upload", "done");
+  await context.close();
 });

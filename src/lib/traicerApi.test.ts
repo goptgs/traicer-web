@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { contentRect, contentTypeFor, framePoint, magnifierSample, readTraicerApiBase, shotShape } from "./traicerApi.ts";
+import { contentRect, contentTypeFor, framePoint, magnifierSample, readTraicerApiBase, shotShape, uploadAccepted } from "./traicerApi.ts";
 
 describe("readTraicerApiBase", () => {
   it("fails closed when the env var is missing or still the example", () => {
@@ -84,6 +84,14 @@ describe("clips", () => {
     assert.equal(contentTypeFor({ name: "a.MP4", type: "" }), "video/mp4");
     assert.equal(contentTypeFor({ name: "a.mov", type: "" }), "video/quicktime");
     assert.equal(contentTypeFor({ name: "a.webm", type: "video/webm" }), null);
+  });
+
+  it("treats a fully sent PUT as done even when CORS hides the 200", () => {
+    assert.equal(uploadAccepted(200, true, false), true);
+    assert.equal(uploadAccepted(0, true, false), true);
+    assert.equal(uploadAccepted(0, false, false), false);
+    assert.equal(uploadAccepted(200, true, true), false);
+    assert.equal(uploadAccepted(403, true, false), false);
   });
 
   it("names the nine shapes from high-draw to low-fade", () => {

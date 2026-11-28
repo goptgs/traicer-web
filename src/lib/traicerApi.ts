@@ -206,6 +206,16 @@ export async function createUpload(
   return { jobId: body.jobId, uploadUrl: body.uploadUrl, key: body.key };
 }
 
+/**
+ * A presigned R2 PUT can store the file and still hide the 200 from the page
+ * (status 0) when the response has no CORS header. The body was sent.
+ */
+export function uploadAccepted(status: number, sentAll: boolean, aborted: boolean): boolean {
+  if (aborted) return false;
+  if (status >= 200 && status < 300) return true;
+  return status === 0 && sentAll;
+}
+
 export function putFile(
   uploadUrl: string,
   file: Blob,
@@ -214,21 +224,37 @@ export function putFile(
 ): { done: Promise<void>; abort: () => void } {
   const xhr = new XMLHttpRequest();
   const done = new Promise<void>((resolve, reject) => {
+    let sentAll = false;
+    let aborted = false;
+    const finish = () => {
+      if (uploadAccepted(xhr.status, sentAll, aborted)) {
+        onProgress(1);
+        resolve();
+        return;
+      }
+      if (aborted) {
+        reject(new Error("Upload cancelled."));
+        return;
+      }
+      reject(new Error(xhr.status ? `Upload failed (${xhr.status}).` : "Upload failed. Check the connection and try again."));
+    };
     xhr.open("PUT", uploadUrl);
     xhr.setRequestHeader("Content-Type", contentType);
     xhr.upload.onprogress = (event) => {
-      if (event.lengthComputable && event.total > 0) onProgress(event.loaded / event.total);
-    };
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        onProgress(1);
-        resolve();
-      } else {
-        reject(new Error(`Upload failed (${xhr.status}).`));
+      if (event.lengthComputable && event.total > 0) {
+        if (event.loaded >= event.total) sentAll = true;
+        onProgress(event.loaded / event.total);
       }
     };
-    xhr.onerror = () => reject(new Error("Upload failed. Check the connection and try again."));
-    xhr.onabort = () => reject(new Error("Upload cancelled."));
+    xhr.upload.onload = () => {
+      sentAll = true;
+    };
+    xhr.onload = finish;
+    xhr.onerror = finish;
+    xhr.onabort = () => {
+      aborted = true;
+      finish();
+    };
     xhr.send(file);
   });
   return { done, abort: () => xhr.abort() };

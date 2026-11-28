@@ -188,6 +188,7 @@ export function TryEditor() {
   const playbackError = Boolean(selected && failedId === selected.id);
 
   const clipsRef = useRef(clips);
+  const draftSent = useRef(new Set<string>());
   clipsRef.current = clips;
   const gesture = useRef<number | null>(null);
   const videoSize = useRef({ width: 0, height: 0 });
@@ -691,7 +692,13 @@ export function TryEditor() {
       });
       aborts.current[clip.id] = transfer.abort;
       await transfer.done;
-      patch(clip.id, (current) => ({ ...current, upload: "done", uploadProgress: 1 }));
+      patch(clip.id, (current) => ({
+        ...current,
+        jobId: current.jobId ?? ticket.jobId,
+        upload: "done",
+        uploadProgress: 1,
+        uploadError: null,
+      }));
     } catch (error) {
       patch(clip.id, (current) => ({
         ...current,
@@ -751,7 +758,6 @@ export function TryEditor() {
       return;
     }
     setTapReject(null);
-    const next = { ...clip, points: { ...clip.points, landing: point }, landingTime: decision.landingTime, hangOverride: false };
     patch(clip.id, (current) => ({
       ...current,
       points: { ...current.points, landing: point },
@@ -759,12 +765,26 @@ export function TryEditor() {
       hangOverride: false,
       step: "landing",
     }));
-    if (clip.upload !== "done" || !clip.jobId) {
-      setTapReject("Landing is marked. The clip is still uploading, so the draft has not been sent.");
-      return;
-    }
-    void traceClip(next);
   };
+
+  useEffect(() => {
+    for (const clip of clips) {
+      if (!clip.points.landing || clip.trajectory || clip.phase !== "mark" || clip.busy) continue;
+      if (clip.upload === "done" && clip.jobId) {
+        if (draftSent.current.has(clip.id)) continue;
+        draftSent.current.add(clip.id);
+        if (clip.id === selectedId) setTapReject(null);
+        void traceClip(clip);
+        continue;
+      }
+      if (clip.id !== selectedId) continue;
+      setTapReject(
+        clip.upload === "error"
+          ? clip.uploadError || "The upload failed. Retry it, then the draft will be sent."
+          : "Landing is marked. The clip is still uploading, so the draft has not been sent.",
+      );
+    }
+  }, [clips, selectedId]);
 
   useEffect(() => {
     function onDown(event: globalThis.PointerEvent) {
