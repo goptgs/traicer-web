@@ -134,6 +134,7 @@ export function TryEditor() {
   const fileRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
+  const slotRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const magRef = useRef<HTMLCanvasElement>(null);
   const hangTouched = useRef(false);
@@ -146,6 +147,8 @@ export function TryEditor() {
   const [tool, setTool] = useState<Tool>("ball");
   const [mag, setMag] = useState<{ x: number; y: number; touch: boolean } | null>(null);
   const [showResult, setShowResult] = useState(false);
+  const [stageFull, setStageFull] = useState(false);
+  const [stageSize, setStageSize] = useState<{ width: number; height: number } | null>(null);
   const [undo, setUndo] = useState<{ clip: Clip; index: number } | null>(null);
   const [measuredFps, setMeasuredFps] = useState<number | null>(null);
   const undoTimer = useRef<number | null>(null);
@@ -185,6 +188,43 @@ export function TryEditor() {
       video.videoHeight,
     );
   }
+
+  useEffect(() => {
+    const onChange = () => {
+      const doc = document as Document & { webkitFullscreenElement?: Element | null };
+      setStageFull(Boolean(document.fullscreenElement || doc.webkitFullscreenElement));
+    };
+    document.addEventListener("fullscreenchange", onChange);
+    document.addEventListener("webkitfullscreenchange", onChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", onChange);
+      document.removeEventListener("webkitfullscreenchange", onChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    const slot = slotRef.current;
+    if (!slot) return;
+    const update = () => {
+      const video = videoRef.current;
+      if (!video?.videoWidth || !slot.clientWidth || !slot.clientHeight) return;
+      const fit = contentRect(
+        { left: 0, top: 0, width: slot.clientWidth, height: slot.clientHeight },
+        video.videoWidth,
+        video.videoHeight,
+      );
+      if (fit) setStageSize({ width: Math.floor(fit.width), height: Math.floor(fit.height) });
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(slot);
+    const video = videoRef.current;
+    video?.addEventListener("loadedmetadata", update);
+    return () => {
+      observer.disconnect();
+      video?.removeEventListener("loadedmetadata", update);
+    };
+  }, [selected?.id, showResult]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -410,7 +450,7 @@ export function TryEditor() {
           trajectory,
           snappedBall: job.ball ?? clip.snappedBall,
           phase: job.status === "done" ? (exporting ? "done" : "draft") : job.status === "error" ? "error" : clip.phase,
-          stepsOpen: exporting && job.status === "done" ? false : clip.stepsOpen,
+          stepsOpen: clip.stepsOpen,
           busy: job.status === "done" || job.status === "error" ? null : kind,
           fitId,
           trackedFrames: curve?.trackedFrames ?? (typeof job.trackedFrames === "number" ? job.trackedFrames : clip.trackedFrames),
@@ -800,7 +840,7 @@ export function TryEditor() {
       ) : null}
 
       {clips.length > 0 ? (
-        <div className={selected?.stepsOpen ? "edit-layout is-focus" : "edit-layout"}>
+        <div className={selected ? "edit-layout is-focus" : "edit-layout"}>
           <aside className="clip-list">
             <h2>Clips ({clips.length})</h2>
             <ul>
@@ -834,7 +874,8 @@ export function TryEditor() {
             <div className="edit-main">
               <div className="stage-column">
               <p className="step-prompt">{stepPrompt(tool)}</p>
-              <div className="stage" ref={stageRef}>
+              <div className="stage-slot" ref={slotRef}>
+              <div className="stage" ref={stageRef} style={!stageFull && stageSize ? { width: stageSize.width, height: stageSize.height } : undefined}>
                 <button
                   type="button"
                   className="stage-full"
@@ -978,6 +1019,7 @@ export function TryEditor() {
                   </p>
                 ) : null}
               </div>
+              </div>
               {playbackError ? (
                 <p className="form-alert" role="alert">
                   {CANT_PLAY_MESSAGE}
@@ -1002,6 +1044,81 @@ export function TryEditor() {
                 Frame {frameIndex(time, chooseFps(selected.job?.fps, selected.trajectory?.fps, measuredFps))} · {clock(time)} / {clock(selected.duration)}
                 {uploadLabel(selected)}
               </p>
+              <div className="action-bar">
+                {(tool === "shape" || selected.preview) && selected.trajectory ? (
+                  <button
+                    type="button"
+                    className={selected.preview ? "btn btn-primary" : "btn btn-secondary"}
+                    disabled={!selected.preview || selected.busy != null}
+                    onClick={() => void updateCurve(selected)}
+                  >
+                    {selected.busy === "update" ? "Updating curve..." : "Update curve"}
+                  </button>
+                ) : null}
+                {selected.trajectory && selected.phase !== "drafting" && selected.phase !== "rendering" && (selected.phase !== "done" || selected.preview) ? (
+                  <button
+                    type="button"
+                    className={selected.preview ? "btn btn-secondary" : "btn btn-primary"}
+                    disabled={selected.upload !== "done" || !selected.points.landing || Boolean(selected.preview) || !selected.fitId || selected.busy != null}
+                    onClick={() => void renderClip(selected)}
+                  >
+                    {selected.busy === "render" ? "Rendering…" : "Render"}
+                  </button>
+                ) : selected.phase === "drafting" || selected.phase === "rendering" || !selected.trajectory ? (
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={
+                      selected.upload !== "done" ||
+                      !selected.points.landing ||
+                      selected.phase === "drafting" ||
+                      selected.phase === "rendering" ||
+                      selected.busy != null
+                    }
+                    onClick={() => void traceClip(selected)}
+                  >
+                    {selected.phase === "rendering" ? "Rendering…" : selected.phase === "drafting" ? "Tracing…" : "Trace this clip"}
+                  </button>
+                ) : null}
+                {selected.preview ? <p className="export-note">Update curve first</p> : null}
+                {selected.trajectory ? (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      setShowResult(false);
+                      setTool("shape");
+                      patch(selected.id, (clip) => ({ ...clip, stepsOpen: true }));
+                    }}
+                  >
+                    Adjust shape
+                  </button>
+                ) : null}
+                {selected.job?.playUrl || selected.job?.downloadUrl ? (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      setShowResult((on) => {
+                        if (on) setTool("shape");
+                        return !on;
+                      });
+                    }}
+                  >
+                    {showResult ? "Edit" : "Result"}
+                  </button>
+                ) : null}
+                {selected.job?.downloadUrl ? (
+                  <a className="btn btn-secondary" href={selected.job.downloadUrl}>
+                    Download
+                  </a>
+                ) : null}
+                {selected.job?.vertical?.downloadUrl ? (
+                  <a className="btn btn-secondary" href={selected.job.vertical.downloadUrl}>
+                    Download 9:16
+                  </a>
+                ) : null}
+              </div>
               </div>
 
               <div className="edit-panel">
@@ -1112,6 +1229,8 @@ export function TryEditor() {
                     </li>
                   </ul>
                 )}
+                <details className="more-options">
+                  <summary>Colour, crop and tracer</summary>
                 <div className="step-card">
                   <div className="step-head">
                     <span>Colour</span>
@@ -1177,6 +1296,7 @@ export function TryEditor() {
                   />
                   Tracer layer
                 </label>
+                </details>
 
                 {selected.upload === "uploading" ? (
                   <div className="meter" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(selected.uploadProgress * 100)}>
@@ -1191,73 +1311,6 @@ export function TryEditor() {
                     </button>
                   </p>
                 ) : null}
-
-                <div className="hero-actions">
-                  {selected.trajectory ? (
-                    <button
-                      type="button"
-                      className={selected.preview ? "btn btn-primary" : "btn btn-secondary"}
-                      disabled={!selected.preview || selected.busy != null}
-                      onClick={() => void updateCurve(selected)}
-                    >
-                      {selected.busy === "update" ? "Updating curve..." : "Update curve"}
-                    </button>
-                  ) : null}
-                  {selected.trajectory && selected.phase !== "drafting" && selected.phase !== "rendering" ? (
-                    <button
-                      type="button"
-                      className="btn btn-primary btn-lg"
-                      disabled={selected.upload !== "done" || !selected.points.landing || Boolean(selected.preview) || !selected.fitId || selected.busy != null}
-                      onClick={() => void renderClip(selected)}
-                    >
-                      {selected.busy === "render" ? "Rendering…" : "Render"}
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      className="btn btn-primary btn-lg"
-                      disabled={
-                        selected.upload !== "done" ||
-                        !selected.points.landing ||
-                        selected.phase === "drafting" ||
-                        selected.phase === "rendering" ||
-                        selected.busy != null
-                      }
-                      onClick={() => void traceClip(selected)}
-                    >
-                      {selected.phase === "rendering" ? "Rendering…" : selected.phase === "drafting" ? "Tracing…" : "Trace this clip"}
-                    </button>
-                  )}
-                  {selected.preview ? <p className="export-note">Update curve first</p> : null}
-                  {selected.trajectory ? (
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      onClick={() => {
-                        setShowResult(false);
-                        setTool("shape");
-                        patch(selected.id, (clip) => ({ ...clip, stepsOpen: true }));
-                      }}
-                    >
-                      Adjust shape
-                    </button>
-                  ) : null}
-                  {selected.job?.playUrl || selected.job?.downloadUrl ? (
-                    <button type="button" className="btn btn-secondary" onClick={() => setShowResult((on) => !on)}>
-                      {showResult ? "Edit" : "Result"}
-                    </button>
-                  ) : null}
-                  {selected.job?.downloadUrl ? (
-                    <a className="btn btn-secondary" href={selected.job.downloadUrl}>
-                      Download 16:9
-                    </a>
-                  ) : null}
-                  {selected.job?.vertical?.downloadUrl ? (
-                    <a className="btn btn-secondary" href={selected.job.vertical.downloadUrl}>
-                      Download 9:16
-                    </a>
-                  ) : null}
-                </div>
 
                 {selected.busy === "update" ? (
                   <p className="trace-status" role="status">

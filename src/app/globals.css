@@ -1940,17 +1940,52 @@ body:has(.edit-layout.is-focus) .site-footer {
     z-index: 1;
   }
 
-  .edit-layout.is-focus .stage {
+  .edit-layout.is-focus .stage-slot {
     flex: 1 1 auto;
+    width: 100%;
     min-height: 0;
-    height: auto;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .edit-layout.is-focus .stage {
+    flex: none;
+    margin-inline: auto;
+    max-width: 100%;
+    max-height: 100%;
     aspect-ratio: auto;
   }
 
+  .edit-layout.is-focus .stage:fullscreen,
+  .edit-layout.is-focus .stage:-webkit-full-screen {
+    width: 100vw;
+    height: 100vh;
+    max-width: none;
+    max-height: none;
+  }
+
   .edit-layout.is-focus .edit-panel {
-    flex: 0 1 auto;
-    max-height: 46%;
-    overflow: auto;
+    flex: 0 1 200px;
+    max-height: 200px;
+    overflow: hidden;
+  }
+
+  .action-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    margin-top: 8px;
+  }
+
+  .action-bar .btn {
+    width: auto;
+  }
+
+  .more-options {
+    margin-top: 8px;
   }
 
   .edit-layout.is-focus .step-prompt {
@@ -1961,6 +1996,7 @@ body:has(.edit-layout.is-focus) .site-footer {
   .edit-layout.is-focus .edit-main {
     display: flex;
     flex-direction: column;
+    align-items: stretch;
     height: 100%;
     min-height: 0;
     grid-template-columns: none;

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { contentTypeFor, framePoint, magnifierSample, readTraicerApiBase, shotShape } from "./traicerApi.ts";
+import { contentRect, contentTypeFor, framePoint, magnifierSample, readTraicerApiBase, shotShape } from "./traicerApi.ts";
 
 describe("readTraicerApiBase", () => {
   it("fails closed when the env var is missing or still the example", () => {
@@ -50,6 +50,21 @@ describe("framePoint", () => {
     const element = { left: 100, top: 50, width: 400, height: 400 };
     assert.equal(framePoint(200, 60, element, 1600, 900), null);
     assert.deepEqual(framePoint(100, 250, element, 1600, 900), { x: 0, y: 0.5 });
+  });
+});
+
+describe("contentRect", () => {
+  it("centres a 16:9 picture in a 21:9 frame and in a 4:3 frame", () => {
+    const wide = contentRect({ left: 0, top: 0, width: 2100, height: 900 }, 1920, 1080);
+    assert.ok(wide);
+    assert.ok(Math.abs(wide.width / wide.height - 16 / 9) < 0.001);
+    assert.ok(Math.abs(wide.left - (2100 - wide.width) / 2) < 0.1);
+    assert.equal(wide.top, 0);
+    const tall = contentRect({ left: 0, top: 0, width: 1600, height: 1200 }, 1920, 1080);
+    assert.ok(tall);
+    assert.ok(Math.abs(tall.width / tall.height - 16 / 9) < 0.001);
+    assert.equal(tall.left, 0);
+    assert.ok(Math.abs(tall.top - (1200 - tall.height) / 2) < 0.1);
   });
 });
 
