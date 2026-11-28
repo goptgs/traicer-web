@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState, type PointerEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type PointerEvent } from "react";
+import { capturePosterFromUrl } from "@/lib/clipPoster";
 import { requestExport } from "@/lib/entitlements";
 import {
   MAX_CLIP_BYTES,
@@ -152,6 +153,11 @@ export function TryEditor() {
   const base = readTraicerApiBase();
   const fileRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const bindVideo = useCallback((node: HTMLVideoElement | null) => {
+    videoRef.current = node;
+    node?.setAttribute("playsinline", "");
+    node?.setAttribute("webkit-playsinline", "");
+  }, []);
   const stageRef = useRef<HTMLDivElement>(null);
   const slotRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -189,6 +195,9 @@ export function TryEditor() {
 
   const clipsRef = useRef(clips);
   const draftSent = useRef(new Set<string>());
+  const posterQueue = useRef(Promise.resolve());
+  const pendingBall = useRef<{ id: string; x: number; y: number } | null>(null);
+  const [ballAttempt, setBallAttempt] = useState(0);
   clipsRef.current = clips;
   const gesture = useRef<number | null>(null);
   const videoSize = useRef({ width: 0, height: 0 });
@@ -229,6 +238,47 @@ export function TryEditor() {
 
   function patch(id: string, update: (clip: Clip) => Clip) {
     setClips((current) => current.map((clip) => (clip.id === id ? update(clip) : clip)));
+  }
+
+  function enqueuePoster(id: string, file: File) {
+    posterQueue.current = posterQueue.current
+      .then(async () => {
+        const url = URL.createObjectURL(file);
+        try {
+          const poster = await capturePosterFromUrl(url);
+          if (!poster) return;
+          patch(id, (clip) => (clip.poster ? clip : { ...clip, poster }));
+        } finally {
+          URL.revokeObjectURL(url);
+        }
+      })
+      .catch(() => undefined);
+  }
+
+  /** The on-screen clip. videoRef is null for a moment while React swaps it. */
+  function stageVideo(): HTMLVideoElement | null {
+    const live = document.querySelector(".edit-app .stage video");
+    if (live instanceof HTMLVideoElement && live.isConnected) {
+      videoRef.current = live;
+      return live;
+    }
+    const current = videoRef.current;
+    return current?.isConnected ? current : null;
+  }
+
+  /** Set the ball from a pointer, or wait until this clip's picture has a box. */
+  function placeBall(clientX: number, clientY: number, clipId: string): "set" | "miss" | "wait" {
+    const video = stageVideo();
+    if (!video || video.readyState < 2 || video.videoWidth <= 0 || video.videoHeight <= 0) return "wait";
+    const box = video.getBoundingClientRect();
+    if (box.width < 2 || box.height < 2) return "wait";
+    const point = framePoint(clientX, clientY, box, video.videoWidth, video.videoHeight);
+    if (!point) return "miss";
+    pendingBall.current = null;
+    setTapReject(null);
+    patch(clipId, (current) => ({ ...current, points: { ...current.points, ball: point }, step: "impact" }));
+    setTool("impact");
+    return "set";
   }
 
   function measureContent() {
@@ -678,6 +728,7 @@ export function TryEditor() {
         return id;
       });
       setNotice(null);
+      enqueuePoster(id, file);
       void uploadClip(clip);
     }
   }
@@ -722,22 +773,22 @@ export function TryEditor() {
     const box = layer?.getBoundingClientRect() ?? video?.getBoundingClientRect();
     const point = box && width > 0 && height > 0 ? framePoint(clientX, clientY, box, width, height) : null;
     const ready = Boolean(video && video.readyState >= 2 && width > 0 && height > 0);
-    if (!video || !clip) {
+    if (!clip) {
       setTapReject("The video is not on the page.");
       return;
     }
-    if (step === "ball") {
-      if (!ready) {
-        setTapReject("The frame is not ready yet.");
+    if (step === "ball" || tool === "ball") {
+      const outcome = placeBall(clientX, clientY, clip.id);
+      if (outcome === "wait") {
+        pendingBall.current = { id: clip.id, x: clientX, y: clientY };
+        setBallAttempt((n) => n + 1);
         return;
       }
-      if (!point) {
-        setTapReject("That tap missed the picture.");
-        return;
-      }
-      setTapReject(null);
-      patch(clip.id, (current) => ({ ...current, points: { ...current.points, ball: point }, step: "impact" }));
-      setTool("impact");
+      if (outcome === "miss") setTapReject("That tap missed the picture.");
+      return;
+    }
+    if (!video) {
+      setTapReject("The video is not on the page.");
       return;
     }
     const decision = landingTapDecision({
@@ -785,6 +836,47 @@ export function TryEditor() {
       );
     }
   }, [clips, selectedId]);
+
+  useEffect(() => {
+    if (tool !== "ball" || !showResult) return;
+    const clip = clips.find((item) => item.id === selectedId);
+    if (!clip?.job?.playUrl && !clip?.job?.downloadUrl) setShowResult(false);
+  }, [tool, showResult, selectedId, clips]);
+
+  useEffect(() => {
+    const pending = pendingBall.current;
+    if (!pending || pending.id !== selectedId || tool !== "ball") return;
+    let cancelled = false;
+    const tryApply = () => {
+      if (cancelled) return;
+      const current = pendingBall.current;
+      if (!current || current.id !== pending.id) return;
+      const outcome = placeBall(current.x, current.y, current.id);
+      if (outcome === "miss") {
+        pendingBall.current = null;
+        setTapReject("That tap missed the picture.");
+      }
+    };
+    tryApply();
+    const video = stageVideo();
+    video?.addEventListener("loadeddata", tryApply);
+    video?.addEventListener("loadedmetadata", tryApply);
+    video?.addEventListener("seeked", tryApply);
+    video?.addEventListener("canplay", tryApply);
+    const observer = new ResizeObserver(tryApply);
+    if (video) observer.observe(video);
+    if (stageRef.current) observer.observe(stageRef.current);
+    const timer = window.setInterval(tryApply, 50);
+    return () => {
+      cancelled = true;
+      video?.removeEventListener("loadeddata", tryApply);
+      video?.removeEventListener("loadedmetadata", tryApply);
+      video?.removeEventListener("seeked", tryApply);
+      video?.removeEventListener("canplay", tryApply);
+      observer.disconnect();
+      window.clearInterval(timer);
+    };
+  }, [ballAttempt, selectedId, tool, stageSize]);
 
   useEffect(() => {
     function onDown(event: globalThis.PointerEvent) {
@@ -954,6 +1046,8 @@ export function TryEditor() {
   }
 
   function selectClip(clip: Clip) {
+    pendingBall.current = null;
+    setTapReject(null);
     setSelectedId(clip.id);
     setTool(clip.step);
     setShowResult(clip.step === "render" && Boolean(clip.job?.playUrl || clip.job?.downloadUrl) && !clip.preview);
@@ -1208,11 +1302,7 @@ export function TryEditor() {
               <div className="stage-media">
                 <video
                   key={rendered ? `${selected.id}-result` : selected.id}
-                  ref={(node) => {
-                    videoRef.current = node;
-                    node?.setAttribute("playsinline", "");
-                    node?.setAttribute("webkit-playsinline", "");
-                  }}
+                  ref={bindVideo}
                   className="frame-video"
                   src={rendered ? selected.job?.playUrl || selected.job?.downloadUrl : selected.url}
                   playsInline
@@ -1237,15 +1327,6 @@ export function TryEditor() {
                   onCanPlay={() => setReadyId(selected.id)}
                   onLoadedData={() => {
                     setReadyId(selected.id);
-                    const shot = videoRef.current;
-                    if (shot?.videoWidth && !selected.poster) {
-                      const canvas = document.createElement("canvas");
-                      canvas.width = 160;
-                      canvas.height = Math.max(1, Math.round((160 * shot.videoHeight) / shot.videoWidth));
-                      canvas.getContext("2d")?.drawImage(shot, 0, 0, canvas.width, canvas.height);
-                      const poster = canvas.toDataURL("image/jpeg", 0.72);
-                      patch(selected.id, (clip) => (clip.poster ? clip : { ...clip, poster }));
-                    }
                     const video = videoRef.current;
                     if (!video || video.currentTime !== 0) return;
                     try {

@@ -370,3 +370,81 @@ test("draft fires when the PUT finishes before landing and when landing is marke
   await expect(held.locator(".edit-app")).toHaveAttribute("data-upload", "done");
   await context.close();
 });
+
+test("four clips get posters and the first ball tap sets the ball", async ({ page }) => {
+  const dir = "/tmp/e2e-four";
+  mkdirSync(dir, { recursive: true });
+  mkdirSync("/opt/cursor/artifacts/find-ball", { recursive: true });
+  const source = `${dir}/source.mp4`;
+  execFileSync("ffmpeg", [
+    "-y",
+    "-f",
+    "lavfi",
+    "-i",
+    "testsrc=size=3840x2160:rate=120:duration=0.5",
+    "-c:v",
+    "libx264",
+    "-preset",
+    "ultrafast",
+    "-pix_fmt",
+    "yuv420p",
+    "-movflags",
+    "+faststart",
+    source,
+  ]);
+  const files = [1, 2, 3, 4].map((index) => {
+    const path = `${dir}/clip-${index}.mp4`;
+    execFileSync("cp", [source, path]);
+    return path;
+  });
+  await page.addInitScript(() => localStorage.clear());
+  await installApi(page, []);
+
+  for (const viewport of [
+    { width: 1280, height: 800, name: "1280x800" },
+    { width: 1280, height: 720, name: "1280x720" },
+  ]) {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.goto("/try");
+    await page.evaluate(() => localStorage.clear());
+    await page.reload();
+    await page.locator("input[type=file]").setInputFiles(files);
+    await expect(page.locator(".clip-thumb")).toHaveCount(4);
+    await expect(page.locator("video")).toHaveCount(1);
+    await page.waitForFunction(
+      () => {
+        const images = [...document.querySelectorAll(".clip-thumb img")] as HTMLImageElement[];
+        return images.length === 4 && images.every((img) => img.complete && img.naturalWidth > 0);
+      },
+      null,
+      { timeout: 30_000 },
+    );
+    await page.screenshot({ path: `/opt/cursor/artifacts/find-ball/rail-${viewport.name}.png` });
+
+    const tapCentre = async () => {
+      await page.waitForFunction(() => (document.querySelector(".stage video") as HTMLVideoElement | null)?.videoWidth === 3840);
+      const box = await page.locator(".stage video").boundingBox();
+      if (!box) throw new Error("video has no box");
+      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    };
+
+    await tapCentre();
+    await expect(page.getByText("Clip 1 · Ball set")).toBeVisible();
+    await expect(page.locator(".edit-app")).toHaveAttribute("data-tap-reject", "");
+    await expect(page.locator(".instruction")).not.toContainText(/not on the page|missed the picture|covering the picture/);
+    await page.screenshot({ path: `/opt/cursor/artifacts/find-ball/ball-clip1-${viewport.name}.png` });
+
+    await page.locator(".clip-thumb").nth(1).click();
+    await expect(page.locator(".clip-thumb.is-on")).toContainText("Clip 2");
+    await tapCentre();
+    await expect(page.getByText("Clip 2 · Ball set")).toBeVisible();
+    await expect(page.locator(".edit-app")).toHaveAttribute("data-tap-reject", "");
+    await expect(page.locator(".instruction")).not.toContainText(/not on the page|missed the picture|covering the picture/);
+    await page.screenshot({ path: `/opt/cursor/artifacts/find-ball/ball-clip2-${viewport.name}.png` });
+
+    await page.locator(".clip-thumb").nth(0).click();
+    await expect(page.getByText("Clip 1 · Ball set")).toBeVisible();
+    await expect(page.locator(".marker.is-ball")).toBeVisible();
+    await expect(page.locator(".edit-app")).toHaveAttribute("data-tap-reject", "");
+  }
+});
