@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { requestExport } from "@/lib/entitlements";
 import {
   MAX_CLIP_BYTES,
@@ -36,7 +36,21 @@ import {
 } from "@/lib/traicerArc";
 import { CANT_PLAY_MESSAGE, PROBE_WAIT_MS, playbackGaveUp, probeDuration } from "@/lib/probeClip";
 import { renderInput as fitRenderInput } from "@/lib/renderInput";
-import { advanceStep, chooseFps, frameIndex, medianFps, removeClip, restoreClip, stepFrames, stepPrompt, type MarkStep } from "@/lib/editorUx";
+import { draftKey, dropDraft, readDrafts, upsertDraft, writeDrafts, type ClipDraft } from "@/lib/clipDraft";
+import {
+  DEFAULT_HANG,
+  UNDO_MS,
+  backStep,
+  canOpenStep,
+  creditLabel,
+  hangReadout,
+  instruction,
+  isTapStep,
+  primaryButton,
+  stepHang,
+  viewportTooSmall,
+} from "@/lib/editScreen";
+import { advanceStep, chooseFps, frameIndex, medianFps, removeClip, restoreClip, stepFrames, type MarkStep } from "@/lib/editorUx";
 import { parseTrajectory, rowsUntil, trailOpacity, type Trajectory } from "@/lib/trajectory";
 
 type Tool = MarkStep;
@@ -89,6 +103,8 @@ type Clip = {
   stepsOpen: boolean;
   portrait: boolean;
   tracerOn: boolean;
+  step: Tool;
+  hangFitted: boolean;
 };
 
 const SWATCHES = [
@@ -147,6 +163,8 @@ export function TryEditor() {
   const [tool, setTool] = useState<Tool>("ball");
   const [mag, setMag] = useState<{ x: number; y: number; touch: boolean } | null>(null);
   const [showResult, setShowResult] = useState(false);
+  const [paused, setPaused] = useState(true);
+  const [sessionSaved, setSessionSaved] = useState(false);
   const [stageFull, setStageFull] = useState(false);
   const [stageSize, setStageSize] = useState<{ width: number; height: number } | null>(null);
   const [undo, setUndo] = useState<{ clip: Clip; index: number } | null>(null);
@@ -167,6 +185,33 @@ export function TryEditor() {
 
   const clipsRef = useRef(clips);
   clipsRef.current = clips;
+  const [frame, setFrame] = useState({ width: 1280, height: 800 });
+  useEffect(() => {
+    const read = () => setFrame({ width: window.innerWidth, height: window.innerHeight });
+    read();
+    window.addEventListener("resize", read);
+    return () => window.removeEventListener("resize", read);
+  }, []);
+  useEffect(() => {
+    let next = readDrafts(localStorage);
+    for (const clip of clips) {
+      const draft: ClipDraft = {
+        key: draftKey(clip.file),
+        name: clip.name,
+        points: clip.points,
+        impactTime: clip.impactTime,
+        landingTime: clip.landingTime,
+        hang: clip.hang,
+        hangOverride: clip.hangOverride,
+        hangFitted: clip.hangFitted,
+        colour: clip.colour,
+        portrait: clip.portrait,
+        step: clip.id === selectedId ? tool : clip.step,
+      };
+      next = upsertDraft(next, draft);
+    }
+    writeDrafts(localStorage, next);
+  }, [clips, selectedId, tool]);
   useEffect(() => {
     return () => {
       for (const id of Object.keys(tokens.current)) tokens.current[id] = -1;
@@ -243,11 +288,31 @@ export function TryEditor() {
     const observer = new ResizeObserver(update);
     observer.observe(video);
     video.addEventListener("loadedmetadata", update);
+    window.addEventListener("resize", update);
     return () => {
       observer.disconnect();
       video.removeEventListener("loadedmetadata", update);
+      window.removeEventListener("resize", update);
     };
-  }, [selected?.id]);
+  }, [selected?.id, stageSize, showResult]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    const clipId = selected?.id;
+    if (!video || !clipId) return;
+    const mark = () => {
+      if (video.videoWidth > 0 && video.readyState >= 2) setReadyId(clipId);
+    };
+    mark();
+    video.addEventListener("loadeddata", mark);
+    video.addEventListener("canplay", mark);
+    const timer = window.setInterval(mark, 200);
+    return () => {
+      video.removeEventListener("loadeddata", mark);
+      video.removeEventListener("canplay", mark);
+      window.clearInterval(timer);
+    };
+  }, [selected?.id, selected?.url]);
 
   useEffect(() => {
     const clipId = selected?.id;
@@ -460,6 +525,7 @@ export function TryEditor() {
           preview: job.status === "done" && !exporting ? null : clip.preview,
           hang: job.status === "done" && !exporting ? hang : clip.hang,
           hangOverride: job.status === "done" && !exporting ? false : clip.hangOverride,
+          hangFitted: job.status === "done" && !exporting ? true : clip.hangFitted,
           points:
             job.status === "done" && kind === "update" && curve?.handles
               ? { ...clip.points, landing: { x: curve.handles.end.x, y: curve.handles.end.y } }
@@ -561,6 +627,7 @@ export function TryEditor() {
       if (probed.status !== "accept") continue;
       const duration = probed.duration ?? 0;
       const id = crypto.randomUUID();
+      const saved = readDrafts(localStorage).find((item) => item.key === draftKey(file));
       const clip: Clip = {
         id,
         file,
@@ -572,12 +639,14 @@ export function TryEditor() {
         upload: "uploading",
         uploadProgress: 0,
         uploadError: null,
-        points: { ball: null, impact: null, landing: null },
-        impactTime: null,
-        landingTime: null,
-        hang: 6,
-        hangOverride: false,
-        colour: "#2EE8FF",
+        points: saved?.points ?? { ball: null, impact: null, landing: null },
+        impactTime: saved?.impactTime ?? null,
+        landingTime: saved?.landingTime ?? null,
+        hang: saved?.hang ?? DEFAULT_HANG,
+        hangOverride: saved?.hangOverride ?? false,
+        hangFitted: saved?.hangFitted ?? false,
+        step: saved?.step ?? "ball",
+        colour: saved?.colour ?? "#2EE8FF",
         busy: null,
         fitId: null,
         trackedFrames: null,
@@ -591,11 +660,15 @@ export function TryEditor() {
         trajectory: null,
         snappedBall: null,
         stepsOpen: true,
-        portrait: false,
+        portrait: saved?.portrait ?? false,
         tracerOn: true,
       };
       setClips((current) => [...current, clip]);
-      setSelectedId((current) => current ?? id);
+      setSelectedId((current) => {
+        if (current) return current;
+        setTool(saved?.step ?? "ball");
+        return id;
+      });
       setNotice(null);
       void uploadClip(clip);
     }
@@ -656,7 +729,7 @@ export function TryEditor() {
   function drawMagnifier(event: PointerEvent<HTMLDivElement>) {
     const video = videoRef.current;
     const canvas = magRef.current;
-    if (!video || !canvas || !video.videoWidth || !selected?.stepsOpen || showResult || (tool !== "ball" && tool !== "landing")) {
+    if (!video || !canvas || !video.videoWidth || showResult || !isTapStep(tool)) {
       setMag(null);
       return;
     }
@@ -698,8 +771,10 @@ export function TryEditor() {
       points: { ball: null, impact: null, landing: null },
       impactTime: null,
       landingTime: null,
-      hang: 6,
+      hang: DEFAULT_HANG,
       hangOverride: false,
+      hangFitted: false,
+      step: "ball",
       busy: null,
       fitId: null,
       trackedFrames: null,
@@ -772,7 +847,8 @@ export function TryEditor() {
         URL.revokeObjectURL(toast.clip.url);
         return null;
       });
-    }, 5000);
+    }, UNDO_MS);
+    writeDrafts(localStorage, dropDraft(readDrafts(localStorage), draftKey(result.removed.clip.file)));
   }
 
   function undoDelete() {
@@ -785,6 +861,67 @@ export function TryEditor() {
     });
   }
 
+  function selectClip(clip: Clip) {
+    setSelectedId(clip.id);
+    setTool(clip.step);
+    setShowResult(clip.step === "render" && Boolean(clip.job?.playUrl || clip.job?.downloadUrl) && !clip.preview);
+  }
+
+  function openStep(step: Tool) {
+    if (!selected) return;
+    const flags = {
+      ball: Boolean(selected.points.ball || selected.snappedBall),
+      impact: selected.impactTime != null,
+      landing: Boolean(selected.points.landing),
+      rendered: Boolean(selected.job?.playUrl || selected.job?.downloadUrl),
+    };
+    if (!canOpenStep(step, flags)) return;
+    setTool(step);
+    patch(selected.id, (clip) => ({ ...clip, step }));
+    setShowResult(step === "render" && flags.rendered && !selected.preview);
+  }
+
+  function goBack() {
+    const previous = backStep(tool);
+    if (previous) openStep(previous);
+  }
+
+  function stepBy(delta: number) {
+    const video = videoRef.current;
+    if (!video) return;
+    if (!video.paused) video.pause();
+    const fps = chooseFps(selected?.job?.fps, selected?.trajectory?.fps, measuredFps);
+    const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : undefined;
+    const next = stepFrames(video.currentTime, fps, delta, duration);
+    video.currentTime = next;
+    setTime(next);
+  }
+
+  function togglePlay() {
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) void video.play();
+    else video.pause();
+  }
+
+  function changeHang(next: number) {
+    if (!selected) return;
+    patch(selected.id, (clip) => ({ ...clip, hang: stepHang(next, 0), hangOverride: true }));
+  }
+
+  function retryFind() {
+    if (!selected) return;
+    const clip = selected;
+    patch(clip.id, (current) => ({
+      ...current,
+      phase: "mark",
+      busy: null,
+      job: current.job ? { ...current.job, status: "done", error: undefined, errorCode: undefined } : current.job,
+    }));
+    setTool("ball");
+    if (clip.points.landing && clip.jobId) void traceClip({ ...clip, phase: "mark" });
+  }
+
   function traceAll() {
     for (const clip of clips) {
       if (clip.upload === "done" && clip.points.landing && clip.phase !== "drafting" && clip.phase !== "rendering" && !clip.busy) {
@@ -793,10 +930,10 @@ export function TryEditor() {
     }
   }
 
+
   if (!base) {
     return (
-      <div className="wrap try-page">
-        <h1>Try it Free!</h1>
+      <div className="edit-app">
         <p className="form-alert" role="status">
           {MISSING_API_MESSAGE}
         </p>
@@ -804,22 +941,89 @@ export function TryEditor() {
     );
   }
 
+  const ballMissing = selected?.job?.errorCode === "BALL_NOT_FOUND";
+  const renderFailed =
+    !ballMissing && (selected?.job?.errorCode === "RENDER_FAILED" || (selected?.phase === "error" && Boolean(selected.fitId)));
+  const rendered = Boolean(showResult && (selected?.job?.playUrl || selected?.job?.downloadUrl));
+  const primary = primaryButton({
+    step: tool,
+    ballMissing,
+    renderFailed,
+    hasDraft: Boolean(selected?.fitId) && !selected?.preview,
+    rendered,
+    shapeDirty: Boolean(selected?.preview),
+    busy: Boolean(selected?.busy),
+  });
+  const line = instruction({ step: tool, ballMissing: Boolean(ballMissing), renderFailed, rendered });
+  const hangShown = hangReadout({
+    fitted: Boolean(selected?.hangFitted),
+    hangOverride: Boolean(selected?.hangOverride),
+    hang: selected?.hang ?? DEFAULT_HANG,
+  });
+  const showFormat = Boolean(selected && (tool === "landing" || tool === "render" || tool === "shape"));
+  const tooSmall = viewportTooSmall(frame.width, frame.height);
+  const fps = chooseFps(selected?.job?.fps, selected?.trajectory?.fps, measuredFps);
+  const duration = selected?.duration ?? 0;
+  const flags = {
+    ball: Boolean(selected?.points.ball || selected?.snappedBall),
+    impact: selected?.impactTime != null,
+    landing: Boolean(selected?.points.landing),
+    rendered: Boolean(selected?.job?.playUrl || selected?.job?.downloadUrl),
+  };
+  const steps: Array<{ id: Tool; label: string; n: string }> = [
+    { id: "ball", label: "Find ball", n: "1" },
+    { id: "impact", label: "Impact", n: "2" },
+    { id: "landing", label: "Landing", n: "3" },
+    { id: "render", label: "Render", n: "4" },
+  ];
+
+  function pressPrimary() {
+    if (!selected || !primary.enabled) return;
+    if (primary.action === "impact") setImpact();
+    if (primary.action === "render" || primary.action === "retry-render") void renderClip(selected);
+    if (primary.action === "update") void updateCurve(selected);
+    if (primary.action === "retry-find") retryFind();
+  }
+
+  function toggleFull() {
+    const node = stageRef.current as (HTMLDivElement & { webkitRequestFullscreen?: () => void }) | null;
+    const doc = document as Document & { webkitFullscreenElement?: Element | null; webkitExitFullscreen?: () => void };
+    if (!node) return;
+    if (document.fullscreenElement || doc.webkitFullscreenElement) {
+      void (document.exitFullscreen?.() ?? doc.webkitExitFullscreen?.());
+    } else {
+      void (node.requestFullscreen?.() ?? node.webkitRequestFullscreen?.());
+    }
+  }
+
   return (
-    <div className="wrap try-page">
-      <h1>Edit</h1>
-      <p className="lede">Mark a clip while the others trace. The line stays on top of the original until you render.</p>
-      <div
-        className="drop-zone"
+    <div className="edit-app" data-step={tool} data-upload={selected?.upload ?? ""} data-error={ballMissing ? "ball" : renderFailed ? "render" : ""}>
+      <header className="app-bar">
+        <Link href="/" className="wordmark-link">
+          <img className="wordmark" src="/brand/logos/traicer-wordmark-light-tight.svg" alt="TrAIcer" width={423} height={192} />
+        </Link>
+        <span className="app-title">Edit</span>
+        <button
+          type="button"
+          className="btn btn-secondary save-session"
+          onClick={() => {
+            setSessionSaved(true);
+            window.setTimeout(() => setSessionSaved(false), 1500);
+          }}
+        >
+          {sessionSaved ? "Saved" : "Save session"}
+        </button>
+      </header>
+      <aside
+        className="clip-rail"
         onDragOver={(event) => event.preventDefault()}
         onDrop={(event) => {
           event.preventDefault();
           void addFiles(event.dataTransfer.files);
         }}
       >
-        <strong>Drop clips</strong>
-        <p>mp4 or mov, up to 500 MB and 60 seconds. One, or a batch.</p>
-        <label className="btn btn-secondary">
-          Choose clips
+        <label className="btn add-clip">
+          + Add clip
           <input
             ref={fileRef}
             className="visually-hidden"
@@ -832,144 +1036,131 @@ export function TryEditor() {
             }}
           />
         </label>
-      </div>
-      {notice ? (
-        <p className="form-alert" role="alert">
-          {notice}
-        </p>
-      ) : null}
-
-      {clips.length > 0 ? (
-        <div className={selected ? "edit-layout is-focus" : "edit-layout"}>
-          <aside className="clip-list">
-            <h2>Clips ({clips.length})</h2>
-            <ul>
-              {clips.map((clip, index) => (
-                <li key={clip.id}>
-                  <button
-                    type="button"
-                    className="clip-select"
-                    title={clip.name}
-                    aria-current={clip.id === selectedId ? "true" : undefined}
-                    onClick={() => setSelectedId(clip.id)}
-                  >
-                    <strong className="clip-name">{clip.name}</strong>
-                    <span className="clip-index">{index + 1}</span>
-                    <span>
-                      {clock(clip.duration)} · {clipStatus(clip)}
-                    </span>
-                  </button>
-                  <button type="button" className="clip-remove" title={clip.name} aria-label={`Remove ${clip.name}`} onClick={() => deleteClip(clip.id)}>
-                    ×
-                  </button>
-                </li>
-              ))}
-            </ul>
-            <button type="button" className="btn btn-secondary" onClick={traceAll}>
-              Trace all
-            </button>
-          </aside>
-
-          {selected ? (
-            <div className="edit-main">
-              <div className="stage-column">
-              <p className="step-prompt">{stepPrompt(tool)}</p>
-              <div className="stage-slot" ref={slotRef}>
-              <div className="stage" ref={stageRef} style={!stageFull && stageSize ? { width: stageSize.width, height: stageSize.height } : undefined}>
-                <button
-                  type="button"
-                  className="stage-full"
-                  onClick={() => {
-                    const node = stageRef.current as (HTMLDivElement & { webkitRequestFullscreen?: () => void }) | null;
-                    const doc = document as Document & { webkitFullscreenElement?: Element | null; webkitExitFullscreen?: () => void };
-                    if (!node) return;
-                    if (document.fullscreenElement || doc.webkitFullscreenElement) {
-                      void (document.exitFullscreen?.() ?? doc.webkitExitFullscreen?.());
-                    } else {
-                      void (node.requestFullscreen?.() ?? node.webkitRequestFullscreen?.());
+        <ul className="clip-thumbs">
+          {clips.map((clip, index) => (
+            <li key={clip.id}>
+              <button
+                type="button"
+                className={clip.id === selectedId ? "clip-thumb is-on" : "clip-thumb"}
+                onClick={() => selectClip(clip)}
+                title={clip.name}
+              >
+                <video src={clip.url} muted playsInline preload="metadata" tabIndex={-1} />
+                <span>
+                  Clip {index + 1} · {clip.phase === "done" ? "Rendered" : clip.phase === "draft" ? "Draft" : clip.points.landing ? "Editing" : "Not started"}
+                </span>
+              </button>
+              <button type="button" className="clip-x" aria-label={`Remove ${clip.name}`} onClick={() => deleteClip(clip.id)}>
+                ×
+              </button>
+            </li>
+          ))}
+        </ul>
+        <div className="rail-drop">Drop videos here or click to choose</div>
+      </aside>
+      <section className="edit-stage">
+        <div className="stepper" role="tablist" aria-label="Steps">
+          {steps.map((step) => {
+            const active = tool === step.id;
+            const done = !active && (step.id === "ball" ? flags.ball : step.id === "impact" ? flags.impact : step.id === "landing" ? flags.landing : flags.rendered);
+            return (
+              <button
+                key={step.id}
+                type="button"
+                className={active ? "step is-active" : "step"}
+                aria-current={active ? "step" : undefined}
+                disabled={!selected || !canOpenStep(step.id, flags)}
+                onClick={() => openStep(step.id)}
+              >
+                <i>{done ? "✓" : step.n}</i>
+                {step.label}
+              </button>
+            );
+          })}
+          <button
+            type="button"
+            className={tool === "shape" ? "step is-optional is-active" : "step is-optional"}
+            disabled={!selected || !canOpenStep("shape", flags)}
+            onClick={() => openStep("shape")}
+          >
+            <i>+</i>
+            Shape (optional)
+          </button>
+        </div>
+        <p className="instruction">{selected ? line : "Add a clip to begin."}</p>
+        <div className="stage-slot" ref={slotRef}>
+          <div
+            className="stage"
+            ref={stageRef}
+            style={!stageFull && stageSize ? { width: stageSize.width, height: stageSize.height } : undefined}
+          >
+            {selected ? (
+              <button type="button" className="stage-full" onClick={toggleFull}>
+                {stageFull ? "Exit" : "Full screen"}
+              </button>
+            ) : null}
+            {selected ? (
+              <div className="stage-media">
+                <video
+                  key={rendered ? `${selected.id}-result` : selected.id}
+                  ref={(node) => {
+                    videoRef.current = node;
+                    node?.setAttribute("playsinline", "");
+                    node?.setAttribute("webkit-playsinline", "");
+                  }}
+                  className="frame-video"
+                  src={rendered ? selected.job?.playUrl || selected.job?.downloadUrl : selected.url}
+                  playsInline
+                  muted
+                  autoPlay={rendered}
+                  preload="auto"
+                  onPlay={() => setPaused(false)}
+                  onPause={() => setPaused(true)}
+                  onLoadedMetadata={() => {
+                    const video = videoRef.current;
+                    if (!video) return;
+                    if (video.readyState >= 2) setReadyId(selected.id);
+                    const learned = video.duration;
+                    if (Number.isFinite(learned) && learned > 0) {
+                      patch(selected.id, (clip) => ({ ...clip, duration: learned }));
+                      if (learned > MAX_CLIP_SECONDS) {
+                        aborts.current[selected.id]?.();
+                        setNotice(`${selected.name} is longer than 60 seconds.`);
+                      }
                     }
                   }}
-                >
-                  Full screen
-                </button>
-                <div className="stage-media">
-                  <video
-                    key={showResult && (selected.job?.playUrl || selected.job?.downloadUrl) ? `${selected.id}-result` : selected.id}
-                    ref={(node) => {
-                      videoRef.current = node;
-                      node?.setAttribute("playsinline", "");
-                      node?.setAttribute("webkit-playsinline", "");
-                    }}
-                    className="frame-video"
-                    src={showResult && (selected.job?.playUrl || selected.job?.downloadUrl) ? selected.job.playUrl || selected.job.downloadUrl : selected.url}
-                    playsInline
-                    muted
-                    controls={showResult}
-                    autoPlay={showResult}
-                    preload="auto"
-                    onLoadedMetadata={() => {
-                      const video = videoRef.current;
-                      if (!video) return;
-                      const learned = video.duration;
-                      if (Number.isFinite(learned) && learned > 0) {
-                        patch(selected.id, (clip) => ({ ...clip, duration: learned }));
-                        if (learned > MAX_CLIP_SECONDS) {
-                          aborts.current[selected.id]?.();
-                          setNotice(`${selected.name} is longer than 60 seconds.`);
-                        }
-                      }
-                      if (video.videoWidth && video.clientWidth) {
-                        setContent(
-                          contentRect(
-                            { left: 0, top: 0, width: video.clientWidth, height: video.clientHeight },
-                            video.videoWidth,
-                            video.videoHeight,
-                          ),
-                        );
-                      }
-                    }}
-                    onLoadedData={() => {
-                      setReadyId(selected.id);
-                      const video = videoRef.current;
-                      if (!video || video.currentTime !== 0) return;
-                      try {
-                        video.currentTime = 0.001;
-                      } catch {
-                        /* Leave the playhead if this frame is not seekable yet. */
-                      }
-                    }}
-                    onError={() => setFailedId(selected.id)}
-                    onTimeUpdate={() => setTime(videoRef.current?.currentTime ?? 0)}
-                  />
-                  <canvas ref={canvasRef} className="tracer-layer" hidden={showResult || !selected.tracerOn || !selected.trajectory} />
-                  {content ? (
-                    <div className="content-frame" style={{ left: content.left, top: content.top, width: content.width, height: content.height }}>
-                      {selected.points.ball && !showResult ? (
-                        <i className="marker is-ball" style={{ left: `${selected.points.ball.x * 100}%`, top: `${selected.points.ball.y * 100}%` }} />
-                      ) : null}
-                      {selected.snappedBall && !showResult ? (
-                        <i
-                          className="marker is-found"
-                          title="Ball found"
-                          style={{ left: `${selected.snappedBall.x * 100}%`, top: `${selected.snappedBall.y * 100}%` }}
-                        />
-                      ) : null}
-                      {selected.points.impact && !showResult ? (
-                        <i
-                          className="marker is-impact"
-                          title="Impact"
-                          style={{ left: `${selected.points.impact.x * 100}%`, top: `${selected.points.impact.y * 100}%` }}
-                        />
-                      ) : null}
-                      {selected.points.landing && !showResult ? (
-                        <i
-                          className="marker is-landing"
-                          style={{ left: `${selected.points.landing.x * 100}%`, top: `${selected.points.landing.y * 100}%` }}
-                        />
-                      ) : null}
-                    </div>
-                  ) : null}
-                  {!showResult ? (
+                  onCanPlay={() => setReadyId(selected.id)}
+                  onLoadedData={() => {
+                    setReadyId(selected.id);
+                    const video = videoRef.current;
+                    if (!video || video.currentTime !== 0) return;
+                    try {
+                      video.currentTime = 0.001;
+                    } catch {
+                      /* Leave the playhead if this frame is not seekable yet. */
+                    }
+                  }}
+                  onError={() => setFailedId(selected.id)}
+                  onTimeUpdate={() => setTime(videoRef.current?.currentTime ?? 0)}
+                />
+                <canvas ref={canvasRef} className="tracer-layer" hidden={showResult || !selected.tracerOn || !selected.trajectory} />
+                {content ? (
+                  <div className="content-frame" style={{ left: content.left, top: content.top, width: content.width, height: content.height }}>
+                    {(selected.points.ball || selected.snappedBall) && !showResult ? (
+                      <i
+                        className="marker is-ball"
+                        style={{
+                          left: `${(selected.points.ball ?? selected.snappedBall)!.x * 100}%`,
+                          top: `${(selected.points.ball ?? selected.snappedBall)!.y * 100}%`,
+                        }}
+                      />
+                    ) : null}
+                    {selected.points.landing && !showResult ? (
+                      <i className="marker is-landing" style={{ left: `${selected.points.landing.x * 100}%`, top: `${selected.points.landing.y * 100}%` }} />
+                    ) : null}
+                  </div>
+                ) : null}
+                {isTapStep(tool) && !showResult ? (
                   <div
                     className={frameReady ? "tap-layer" : "tap-layer is-waiting"}
                     onPointerDown={(event) => {
@@ -980,477 +1171,176 @@ export function TryEditor() {
                     onPointerMove={drawMagnifier}
                     onPointerLeave={() => setMag(null)}
                   />
-                  ) : null}
-                  {content && tool === "shape" && !showResult
-                    ? (() => {
-                        const shown = selected.preview ? curveHandles(selected.preview) : selected.handles;
-                        if (!shown) return null;
-                        const bind = (kind: "apex" | "end") => ({
-                          onPointerDown: (event: PointerEvent<HTMLButtonElement>) => {
-                            event.stopPropagation();
-                            event.preventDefault();
-                            event.currentTarget.setPointerCapture(event.pointerId);
-                          },
-                          onPointerMove: (event: PointerEvent<HTMLButtonElement>) => {
-                            if (event.currentTarget.hasPointerCapture(event.pointerId)) moveHandle(kind, event);
-                          },
-                        });
-                        return (
-                          <div className="handle-layer" style={{ left: content.left, top: content.top, width: content.width, height: content.height }}>
-                            <i className="handle is-impact" title="Impact" style={{ left: `${shown.impact.x * 100}%`, top: `${shown.impact.y * 100}%` }} />
-                            <button type="button" className="handle is-apex" aria-label="Apex" style={{ left: `${shown.apex.x * 100}%`, top: `${shown.apex.y * 100}%` }} {...bind("apex")} />
-                            <button type="button" className="handle is-end" aria-label="End" style={{ left: `${shown.end.x * 100}%`, top: `${shown.end.y * 100}%` }} {...bind("end")} />
-                          </div>
-                        );
-                      })()
-                    : null}
-                </div>
-                <canvas
-                  ref={magRef}
-                  width={160}
-                  height={160}
-                  className={mag?.touch ? "magnifier" : "magnifier is-centred"}
-                  hidden={!mag || (tool !== "ball" && tool !== "landing") || showResult}
-                  style={mag ? { left: mag.touch ? mag.x + 16 : mag.x - 70, top: mag.touch ? mag.y - 80 : mag.y - 70 } : undefined}
-                />
-                {!frameReady && !playbackError ? (
-                  <p className="loading-clip" role="status">
-                    Loading clip…
-                  </p>
                 ) : null}
-              </div>
-              </div>
-              {playbackError ? (
-                <p className="form-alert" role="alert">
-                  {CANT_PLAY_MESSAGE}
-                </p>
-              ) : null}
-              <label className="scrubber">
-                <span className="visually-hidden">Scrub</span>
-                <input
-                  type="range"
-                  min={0}
-                  max={selected.duration || 0}
-                  step={0.01}
-                  value={Math.min(time, selected.duration || 0)}
-                  onChange={(event) => {
-                    const next = Number(event.target.value);
-                    if (videoRef.current) videoRef.current.currentTime = next;
-                    setTime(next);
-                  }}
-                />
-              </label>
-              <p className="export-note">
-                Frame {frameIndex(time, chooseFps(selected.job?.fps, selected.trajectory?.fps, measuredFps))} · {clock(time)} / {clock(selected.duration)}
-                {uploadLabel(selected)}
-              </p>
-              <div className="action-bar">
-                {(tool === "shape" || selected.preview) && selected.trajectory ? (
-                  <button
-                    type="button"
-                    className={selected.preview ? "btn btn-primary" : "btn btn-secondary"}
-                    disabled={!selected.preview || selected.busy != null}
-                    onClick={() => void updateCurve(selected)}
-                  >
-                    {selected.busy === "update" ? "Updating curve..." : "Update curve"}
-                  </button>
-                ) : null}
-                {selected.trajectory && selected.phase !== "drafting" && selected.phase !== "rendering" && (selected.phase !== "done" || selected.preview) ? (
-                  <button
-                    type="button"
-                    className={selected.preview ? "btn btn-secondary" : "btn btn-primary"}
-                    disabled={selected.upload !== "done" || !selected.points.landing || Boolean(selected.preview) || !selected.fitId || selected.busy != null}
-                    onClick={() => void renderClip(selected)}
-                  >
-                    {selected.busy === "render" ? "Rendering…" : "Render"}
-                  </button>
-                ) : selected.phase === "drafting" || selected.phase === "rendering" || !selected.trajectory ? (
-                  <button
-                    type="button"
-                    className="btn btn-primary"
-                    disabled={
-                      selected.upload !== "done" ||
-                      !selected.points.landing ||
-                      selected.phase === "drafting" ||
-                      selected.phase === "rendering" ||
-                      selected.busy != null
-                    }
-                    onClick={() => void traceClip(selected)}
-                  >
-                    {selected.phase === "rendering" ? "Rendering…" : selected.phase === "drafting" ? "Tracing…" : "Trace this clip"}
-                  </button>
-                ) : null}
-                {selected.preview ? <p className="export-note">Update curve first</p> : null}
-                {selected.trajectory ? (
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    onClick={() => {
-                      setShowResult(false);
-                      setTool("shape");
-                      patch(selected.id, (clip) => ({ ...clip, stepsOpen: true }));
-                    }}
-                  >
-                    Adjust shape
-                  </button>
-                ) : null}
-                {selected.job?.playUrl || selected.job?.downloadUrl ? (
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    onClick={() => {
-                      setShowResult((on) => {
-                        if (on) setTool("shape");
-                        return !on;
+                {content && tool === "shape" && !showResult
+                  ? (() => {
+                      const shown = selected.preview ? curveHandles(selected.preview) : selected.handles;
+                      if (!shown) return null;
+                      const bind = (kind: "apex" | "end") => ({
+                        onPointerDown: (event: PointerEvent<HTMLButtonElement>) => {
+                          event.stopPropagation();
+                          event.preventDefault();
+                          event.currentTarget.setPointerCapture(event.pointerId);
+                        },
+                        onPointerMove: (event: PointerEvent<HTMLButtonElement>) => {
+                          if (event.currentTarget.hasPointerCapture(event.pointerId)) moveHandle(kind, event);
+                        },
                       });
-                    }}
-                  >
-                    {showResult ? "Edit" : "Result"}
-                  </button>
-                ) : null}
-                {selected.job?.downloadUrl ? (
-                  <a className="btn btn-secondary" href={selected.job.downloadUrl}>
-                    Download
-                  </a>
-                ) : null}
-                {selected.job?.vertical?.downloadUrl ? (
-                  <a className="btn btn-secondary" href={selected.job.vertical.downloadUrl}>
-                    Download 9:16
-                  </a>
-                ) : null}
-              </div>
-              </div>
-
-              <div className="edit-panel">
-                <div className="panel-head">
-                  <h2>{selected.name}</h2>
-                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => setResetId(selected.id)}>
-                    ↺ Reset
-                  </button>
-                </div>
-                {selected.stepsOpen ? (
-                  <div className="step-cards">
-                    <Step
-                      n={1}
-                      title="Find ball location"
-                      done={Boolean(selected.points.ball || selected.snappedBall)}
-                      onEdit={() => setTool("ball")}
-                      active={tool === "ball"}
-                    >
-                      We can find it automatically, and you can tap near the ball to speed it up.
-                    </Step>
-                    <Step n={2} title="Set impact" done={selected.impactTime != null} onEdit={() => setTool("impact")} active={tool === "impact"}>
-                      Scrub to the strike, then set that frame. Enter works too.
-                      <button type="button" className="btn btn-primary" onClick={setImpact}>
-                        Set impact
-                      </button>
-                    </Step>
-                    <Step n={3} title="Landing" done={Boolean(selected.points.landing)} onEdit={() => setTool("landing")} active={tool === "landing"}>
-                      Scrub to the landing, then tap it.
-                    </Step>
-                    <Step n={4} title="Render" done={selected.phase === "done"} onEdit={() => { setShowResult(false); setTool("render"); }} active={tool === "render"}>
-                      <p>The line is ready. Render it. Adjusting the shape is optional, after you have watched it.</p>
-                    </Step>
-                    {tool === "shape" ? (
-                      <section className="step-card is-on">
-                        <div className="step-head">
-                          <span>Adjust shape</span>
+                      return (
+                        <div className="handle-layer" style={{ left: content.left, top: content.top, width: content.width, height: content.height }}>
+                          <button type="button" className="handle is-apex" aria-label="Apex" style={{ left: `${shown.apex.x * 100}%`, top: `${shown.apex.y * 100}%` }} {...bind("apex")} />
+                          <button type="button" className="handle is-end" aria-label="End" style={{ left: `${shown.end.x * 100}%`, top: `${shown.end.y * 100}%` }} {...bind("end")} />
                         </div>
-                        <p>Drag the apex or end point, then press Update curve. Optional.</p>
-                        <label className="hang">
-                          {selected.hang.toFixed(1)} s
-                          <input
-                            type="range"
-                            min={2}
-                            max={10}
-                            step={0.1}
-                            value={selected.hang}
-                            onChange={(event) => {
-                              hangTouched.current = true;
-                              const hang = Number(event.target.value);
-                              patch(selected.id, (clip) => ({ ...clip, hang, hangOverride: true }));
-                            }}
-                            onPointerUp={(event) => {
-                              if (!hangTouched.current || !selected.points.landing) return;
-                              hangTouched.current = false;
-                              const hang = Number(event.currentTarget.value);
-                              void traceClip({ ...selected, hang, hangOverride: true });
-                            }}
-                            onKeyUp={(event) => {
-                              if (!hangTouched.current || !selected.points.landing) return;
-                              hangTouched.current = false;
-                              const hang = Number(event.currentTarget.value);
-                              void traceClip({ ...selected, hang, hangOverride: true });
-                            }}
-                          />
-                        </label>
-                        {selected.trackedFrames === 0 ? (
-                          <p className="export-note">Couldn't track the ball's start, so the start direction is estimated.</p>
-                        ) : null}
-                        {selected.firstDraft ? (
-                          <button type="button" className="text-link" onClick={() => resetShape(selected.id)}>
-                            Reset shape
-                          </button>
-                        ) : null}
-                      </section>
-                    ) : null}
-                  </div>
-                ) : (
-                  <ul className="step-summary">
-                    <li>
-                      Ball {selected.points.ball || selected.snappedBall ? "✓" : "—"}{" "}
-                      <button type="button" className="edit-chip" onClick={() => { patch(selected.id, (clip) => ({ ...clip, stepsOpen: true })); setTool("ball"); }}>
-                        Edit
-                      </button>
-                    </li>
-                    <li>
-                      Impact {selected.impactTime != null ? "✓" : "—"}{" "}
-                      <button type="button" className="edit-chip" onClick={() => { patch(selected.id, (clip) => ({ ...clip, stepsOpen: true })); setTool("impact"); }}>
-                        Edit
-                      </button>
-                    </li>
-                    <li>
-                      Landing {selected.points.landing ? "✓" : "—"}{" "}
-                      <button type="button" className="edit-chip" onClick={() => { patch(selected.id, (clip) => ({ ...clip, stepsOpen: true })); setTool("landing"); }}>
-                        Edit
-                      </button>
-                    </li>
-                    <li>
-                      Hang {selected.hang.toFixed(1)}s{" "}
-                      <button type="button" className="edit-chip" onClick={() => { patch(selected.id, (clip) => ({ ...clip, stepsOpen: true })); setTool("shape"); }}>
-                        Edit
-                      </button>
-                    </li>
-                    <li>
-                      Shape {selected.trajectory ? "✓" : "—"}{" "}
-                      <button type="button" className="edit-chip" onClick={() => patch(selected.id, (clip) => ({ ...clip, stepsOpen: true }))}>
-                        Edit
-                      </button>
-                    </li>
-                  </ul>
-                )}
-                <details className="more-options">
-                  <summary>Colour, crop and tracer</summary>
-                <div className="step-card">
-                  <div className="step-head">
-                    <span>Colour</span>
-                  </div>
-                  <div className="swatches">
-                    {SWATCHES.map((swatch) => (
-                      <button
-                        key={swatch.hex}
-                        type="button"
-                        aria-label={swatch.name}
-                        aria-pressed={selected.colour.toLowerCase() === swatch.hex.toLowerCase()}
-                        style={{ background: swatch.hex }}
-                        onClick={() => {
-                          setCustom(swatch.hex);
-                          patch(selected.id, (clip) => ({ ...clip, colour: swatch.hex }));
-                        }}
-                      />
-                    ))}
-                    <label className="custom-colour">
-                      Custom
-                      <input
-                        type="color"
-                        value={/^#[0-9a-fA-F]{6}$/.test(selected.colour) ? selected.colour : /^#[0-9a-fA-F]{6}$/.test(custom) ? custom : "#2EE8FF"}
-                        onChange={(event) => {
-                          setCustom(event.target.value);
-                          patch(selected.id, (clip) => ({ ...clip, colour: event.target.value }));
-                        }}
-                      />
-                      <input
-                        aria-label="Hex colour"
-                        value={selected.colour}
-                        onChange={(event) => {
-                          const value = event.target.value;
-                          if (/^#[0-9a-fA-F]{0,6}$/.test(value)) {
-                            patch(selected.id, (clip) => ({ ...clip, colour: value }));
-                            if (/^#[0-9a-fA-F]{6}$/.test(value)) setCustom(value);
-                          }
-                        }}
-                      />
-                    </label>
-                  </div>
-                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => setSignup(true)}>
-                    Save as my default colour
-                  </button>
-                </div>
-                <label className="check-row">
-                  <input
-                    type="checkbox"
-                    checked={selected.portrait}
-                    onChange={(event) => patch(selected.id, (clip) => ({ ...clip, portrait: event.target.checked }))}
-                  />
-                  9:16 as well as 16:9. The portrait crop follows the ball.
-                </label>
-                <label className="check-row">
-                  <input
-                    type="checkbox"
-                        checked={Boolean(selected.trajectory) && selected.tracerOn}
-                        disabled={!selected.trajectory}
-                    onChange={(event) => {
-                      const tracerOn = event.target.checked;
-                      patch(selected.id, (clip) => ({ ...clip, tracerOn }));
-                    }}
-                  />
-                  Tracer layer
-                </label>
-                </details>
-
-                {selected.upload === "uploading" ? (
-                  <div className="meter" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(selected.uploadProgress * 100)}>
-                    <span style={{ width: `${Math.round(selected.uploadProgress * 100)}%` }} />
-                  </div>
-                ) : null}
-                {selected.uploadError ? (
-                  <p className="form-alert" role="alert">
-                    {selected.uploadError}{" "}
-                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => void uploadClip(selected)}>
-                      Retry
-                    </button>
-                  </p>
-                ) : null}
-
-                {selected.busy === "update" ? (
-                  <p className="trace-status" role="status">
-                    Updating curve...
-                  </p>
-                ) : null}
-                {(selected.phase === "drafting" || selected.phase === "rendering") && selected.job ? (
-                  <div className="trace-status" role="status">
-                    <p>{friendlyJobError(selected.job.errorCode, statusLine(selected.job))}</p>
-                    <div className="meter" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(selected.job.progress * 100)}>
-                      <span style={{ width: `${Math.round(selected.job.progress * 100)}%` }} />
-                    </div>
-                  </div>
-                ) : null}
-                {selected.phase === "error" && selected.job ? (
-                  <p className="form-alert" role="alert">
-                    {friendlyJobError(selected.job.errorCode, selected.job.error || statusLine(selected.job))}{" "}
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => void (selected.fitId && !selected.preview ? renderClip(selected) : traceClip(selected))}
-                    >
-                      Retry
-                    </button>
-                  </p>
-                ) : null}
-
+                      );
+                    })()
+                  : null}
               </div>
-            </div>
+            ) : (
+              <div className="stage-media" />
+            )}
+            <canvas
+              ref={magRef}
+              width={160}
+              height={160}
+              className={mag?.touch ? "magnifier" : "magnifier is-centred"}
+              hidden={!mag || !isTapStep(tool) || showResult}
+              style={mag ? { left: mag.touch ? mag.x + 16 : mag.x - 70, top: mag.touch ? mag.y - 80 : mag.y - 70 } : undefined}
+            />
+            {rendered && paused === false ? <span className="playing">Playing</span> : null}
+            {ballMissing ? (
+              <div className="stage-alert" role="alert">
+                <strong>Ball not found</strong>
+                <span>Tap near the ball, or retry the auto-find.</span>
+              </div>
+            ) : null}
+            {renderFailed ? (
+              <div className="stage-alert" role="alert">
+                <strong>Render failed</strong>
+                <span>Your markings are safe.</span>
+              </div>
+            ) : null}
+            {playbackError ? (
+              <p className="stage-alert" role="alert">
+                {CANT_PLAY_MESSAGE}
+              </p>
+            ) : null}
+            {selected && !frameReady && !playbackError ? (
+              <p className="loading-clip" role="status">
+                Loading clip…
+              </p>
+            ) : null}
+          </div>
+        </div>
+        <div className="transport">
+          <button type="button" className="hit" aria-label="Previous frame" onClick={() => stepBy(-1)} disabled={!selected}>
+            ‹
+          </button>
+          <button type="button" className="hit" aria-label={paused ? "Play" : "Pause"} onClick={togglePlay} disabled={!selected}>
+            {paused ? "▶" : "❚❚"}
+          </button>
+          <button type="button" className="hit" aria-label="Next frame" onClick={() => stepBy(1)} disabled={!selected}>
+            ›
+          </button>
+          <label className="scrub">
+            <input
+              type="range"
+              min={0}
+              max={duration || 0}
+              step={0.001}
+              value={Math.min(time, duration || 0)}
+              aria-label="Scrub"
+              disabled={!selected}
+              onChange={(event) => {
+                const next = Number(event.target.value);
+                if (videoRef.current) videoRef.current.currentTime = next;
+                setTime(next);
+              }}
+            />
+            {selected?.impactTime != null && duration > 0 ? (
+              <i className="impact-mark" style={{ left: `${(selected.impactTime / duration) * 100}%` }} title="Impact" />
+            ) : null}
+          </label>
+          <span className="frame-count">
+            Frame {frameIndex(time, fps)} / {duration > 0 ? frameIndex(Math.max(0, duration - 1e-4), fps) : 0}
+          </span>
+        </div>
+        <div className="hang-row">
+          <span className="hang-label">Hang time</span>
+          <button type="button" className="hit" aria-label="Decrease hang time" disabled={!selected} onClick={() => changeHang(stepHang(hangShown, -1))}>
+            ‹
+          </button>
+          <input
+            className="hang-slider"
+            type="range"
+            min={0.1}
+            max={10}
+            step={0.1}
+            aria-label="Hang time"
+            value={hangShown}
+            disabled={!selected}
+            onChange={(event) => changeHang(Number(event.target.value))}
+          />
+          <button type="button" className="hit" aria-label="Increase hang time" disabled={!selected} onClick={() => changeHang(stepHang(hangShown, 1))}>
+            ›
+          </button>
+          <output className="hang-value">{hangShown.toFixed(1)} s</output>
+          <span className="row-gap" />
+          <button type="button" className="btn btn-secondary" onClick={goBack} disabled={!selected || !backStep(tool)}>
+            ‹ Back
+          </button>
+          {flags.rendered && tool !== "shape" ? (
+            <button type="button" className="btn btn-secondary" onClick={() => openStep("shape")}>
+              Shape (opt.)
+            </button>
+          ) : null}
+          {showFormat ? (
+            <label className="format-choice">
+              <input
+                type="checkbox"
+                checked={Boolean(selected?.portrait)}
+                onChange={(event) => {
+                  if (!selected) return;
+                  patch(selected.id, (clip) => ({ ...clip, portrait: event.target.checked }));
+                }}
+              />
+              9:16
+              <span>{creditLabel(Boolean(selected?.portrait))}</span>
+            </label>
+          ) : null}
+          {primary.action === "export" && selected?.job?.downloadUrl ? (
+            <a className="btn btn-primary" href={selected.job.downloadUrl}>
+              Export
+            </a>
+          ) : (
+            <button type="button" className={primary.enabled ? "btn btn-primary" : "btn btn-secondary"} disabled={!primary.enabled} onClick={pressPrimary}>
+              {selected?.busy === "render" ? "Rendering…" : selected?.busy === "update" ? "Updating…" : primary.label}
+            </button>
+          )}
+          {selected?.portrait && selected.job?.vertical?.downloadUrl ? (
+            <a className="portrait-file" href={selected.job.vertical.downloadUrl}>
+              9:16 file
+            </a>
           ) : null}
         </div>
+      </section>
+      {tooSmall ? (
+        <div className="enlarge" role="status">
+          Please enlarge your window
+        </div>
       ) : null}
-
+      {notice ? (
+        <p className="edit-notice" role="status">
+          {notice}
+        </p>
+      ) : null}
       {undo ? (
         <div className="undo-toast" role="status">
-          <span>{undo.clip.name} removed.</span>
-          <button type="button" className="btn btn-secondary btn-sm" onClick={undoDelete}>
+          Clip removed.{" "}
+          <button type="button" onClick={undoDelete}>
             Undo
           </button>
-        </div>
-      ) : null}
-
-      {resetId ? (
-        <div className="modal-backdrop" onMouseDown={() => setResetId(null)}>
-          <div className="modal confirm" role="dialog" aria-modal="true" aria-labelledby="reset-title" onMouseDown={(event) => event.stopPropagation()}>
-            <h2 id="reset-title">Reset this clip?</h2>
-            <p>Clears all markings and the tracer. Can't be undone.</p>
-            <div className="hero-actions">
-              <button type="button" className="btn btn-secondary" onClick={() => setResetId(null)}>
-                Cancel
-              </button>
-              <button type="button" className="btn btn-primary" onClick={() => resetClip(resetId)}>
-                Reset
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {signup ? (
-        <div className="modal-backdrop" onMouseDown={() => setSignup(false)}>
-          <div className="modal confirm" role="dialog" aria-modal="true" aria-labelledby="signup-title" onMouseDown={(event) => event.stopPropagation()}>
-            <h2 id="signup-title">Save as my default colour</h2>
-            <p>An account will remember this colour on every clip. Sign-up is coming.</p>
-            <div className="hero-actions">
-              <button type="button" className="btn btn-primary" onClick={() => setSignup(false)}>
-                OK
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {upgrade ? (
-        <div className="modal-backdrop" onMouseDown={() => setUpgrade(null)}>
-          <div className="modal confirm" role="dialog" aria-modal="true" aria-labelledby="upgrade-title" onMouseDown={(event) => event.stopPropagation()}>
-            <h2 id="upgrade-title">Save your work</h2>
-            <p>{upgrade}</p>
-            <div className="hero-actions">
-              <Link className="btn btn-primary" href="/pricing">
-                See pricing
-              </Link>
-              <button type="button" className="btn btn-secondary" onClick={() => setUpgrade(null)}>
-                Not now
-              </button>
-            </div>
-          </div>
         </div>
       ) : null}
     </div>
   );
 }
-
-function clipStatus(clip: Clip): string {
-  if (clip.upload === "uploading") return "Uploading";
-  if (clip.upload === "error") return "Upload failed";
-  if (clip.busy === "update") return "Updating curve";
-  if (clip.phase === "drafting") return "Tracing";
-  if (clip.phase === "rendering") return "Rendering";
-  if (clip.phase === "done") return "Ready";
-  if (clip.phase === "error") return "Needs a retry";
-  if (clip.phase === "draft") return "Draft";
-  if (!clip.points.landing) return "Needs a landing";
-  return "Ready to trace";
-}
-
-function uploadLabel(clip: Clip): string {
-  if (clip.upload === "uploading") return ` · Uploading ${Math.round(clip.uploadProgress * 100)}%`;
-  if (clip.upload === "done") return " · Uploaded";
-  if (clip.upload === "error") return " · Upload failed";
-  return "";
-}
-
-function Step({
-  n,
-  title,
-  done,
-  active,
-  onEdit,
-  children,
-}: {
-  n: number;
-  title: string;
-  done: boolean;
-  active: boolean;
-  onEdit: () => void;
-  children: ReactNode;
-}) {
-  const tone = active ? "is-on" : done ? "is-done" : "is-dim";
-  return (
-    <section className={`step-card ${tone}`}>
-      <div className="step-head">
-        <span className="step-num" aria-hidden="true">{done && !active ? "✓" : n}</span>
-        <span>{title}</span>
-        <button type="button" className="edit-chip" onClick={onEdit}>
-          Edit
-        </button>
-      </div>
-      {active ? <div>{children}</div> : null}
-    </section>
-  );
-}
-
