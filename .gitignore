@@ -1,0 +1,14 @@
+node_modules/
+.next/
+out/
+.env
+.env.local
+.env.*.local
+.DS_Store
+.netlify/
+.wrangler/
+.dev.vars
+*.log
+tsconfig.tsbuildinfo
+test-results/
+playwright-report/

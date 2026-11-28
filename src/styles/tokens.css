@@ -1,0 +1,154 @@
+/* TrAIcer design tokens — Ice Current, v0.1.0-wip. Working draft, not approved.
+   Jim's icon and wordmark shapes are the source of truth.
+   Fonts: Rajdhani (headings), Inter (body). Both SIL OFL.
+   Live sites may load them from Google Fonts; this kit self-hosts subsets in assets/fonts/.
+*/
+
+:root {
+  /* Brand */
+  --tr-night: #071526;
+  --tr-frost: #E8F4FA;
+  --tr-ice: #2EE8FF;
+  --tr-tracer: #1AD6F5;
+  --tr-core: #FFFFFF;
+  --tr-mist: #EEF5F8;
+  --tr-ink: #0A1A2C;
+  --tr-ice-deep: #007A94;
+  --tr-tracer-deep: #0098B8;
+
+  /* Supporting */
+  --tr-halo: #AFF1FC;
+  --tr-tracer-shade: #13A1B8;
+  --tr-ice-hover: #5AEFFF;
+  --tr-ice-deep-hover: #006277;
+  --tr-night-lift: #0C1E34;
+  --tr-night-raised: #102640;
+  --tr-night-border: #1A3348;
+
+  /* Neutral ramp (cool, distinct from ShotTracerPro steel #2B5672) */
+  --tr-neutral-0: #FFFFFF;
+  --tr-neutral-50: #EEF5F8;
+  --tr-neutral-100: #DCE8EE;
+  --tr-neutral-200: #C3D3DB;
+  --tr-neutral-300: #9BB0BB;
+  --tr-neutral-400: #738995;
+  --tr-neutral-500: #566B77;
+  --tr-neutral-600: #3E515C;
+  --tr-neutral-700: #2A3B44;
+  --tr-neutral-800: #16242C;
+  --tr-neutral-900: #0A1A2C;
+  --tr-neutral-950: #071526;
+
+  /* Semantic. Success is a cyan-teal, not Impact Golf green.
+     Warning is yellow #FFD60A, not orange.
+     Error is a cool crimson, not Impact Golf coral and not ShotTracerPro rose. */
+  --tr-success: #14C4B0;
+  --tr-success-deep: #087A74;
+  --tr-success-bg: #D6F5F1;
+  --tr-warning: #FFD60A;
+  --tr-warning-ink: #3D3200;
+  --tr-warning-bg: #FFF6C2;
+  --tr-error: #FF5C76;
+  --tr-error-deep: #B10F2E;
+  --tr-error-bg: #FDE6EA;
+
+  /* Dark-first theme aliases */
+  --tr-bg: var(--tr-night);
+  --tr-surface: var(--tr-night-lift);
+  --tr-surface-2: var(--tr-night-raised);
+  --tr-border: var(--tr-night-border);
+  --tr-text: var(--tr-frost);
+  --tr-text-secondary: var(--tr-neutral-300);
+  --tr-text-muted: var(--tr-neutral-400);
+  --tr-link: var(--tr-ice);
+  --tr-primary: var(--tr-ice);
+  --tr-primary-hover: var(--tr-ice-hover);
+  --tr-on-primary: var(--tr-night);
+  --tr-focus-ring: rgba(46, 232, 255, 0.45);
+  --tr-accent: var(--tr-ice);
+  --tr-accent-graphic: var(--tr-tracer);
+
+  /* Type */
+  --tr-font-heading: "Rajdhani", ui-sans-serif, system-ui, sans-serif;
+  --tr-font-body: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --tr-weight-regular: 400;
+  --tr-weight-medium: 500;
+  --tr-weight-semibold: 600;
+  --tr-weight-bold: 700;
+
+  --tr-text-display-size: 3.5rem;
+  --tr-text-display-line: 1.1;
+  --tr-text-display-weight: 700;
+  --tr-text-display-tracking: -0.02em;
+  --tr-text-h1-size: 2.25rem;
+  --tr-text-h1-line: 1.15;
+  --tr-text-h1-weight: 700;
+  --tr-text-h1-tracking: -0.015em;
+  --tr-text-h2-size: 1.75rem;
+  --tr-text-h2-line: 1.2;
+  --tr-text-h2-weight: 600;
+  --tr-text-h2-tracking: -0.01em;
+  --tr-text-h3-size: 1.25rem;
+  --tr-text-h3-line: 1.3;
+  --tr-text-h3-weight: 600;
+  --tr-text-h3-tracking: 0;
+  --tr-text-body-size: 1rem;
+  --tr-text-body-line: 1.55;
+  --tr-text-body-weight: 400;
+  --tr-text-body-tracking: 0;
+  --tr-text-small-size: 0.875rem;
+  --tr-text-small-line: 1.5;
+  --tr-text-small-weight: 400;
+  --tr-text-small-tracking: 0;
+  --tr-text-caption-size: 0.75rem;
+  --tr-text-caption-line: 1.4;
+  --tr-text-caption-weight: 500;
+  --tr-text-caption-tracking: 0.06em;
+  --tr-text-button-size: 1rem;
+  --tr-text-button-line: 1;
+  --tr-text-button-weight: 600;
+  --tr-text-button-tracking: 0.02em;
+
+  /* Space, radius, shadow */
+  --tr-space-0: 0;
+  --tr-space-1: 4px;
+  --tr-space-2: 8px;
+  --tr-space-3: 12px;
+  --tr-space-4: 16px;
+  --tr-space-5: 24px;
+  --tr-space-6: 32px;
+  --tr-space-7: 48px;
+  --tr-space-8: 64px;
+  --tr-space-9: 96px;
+  --tr-radius-sm: 6px;
+  --tr-radius-md: 10px;
+  --tr-radius-lg: 16px;
+  --tr-radius-xl: 24px;
+  --tr-radius-pill: 9999px;
+  --tr-radius-icon: 22.4%;
+  --tr-shadow-sm: 0 1px 2px rgba(7, 21, 38, 0.45);
+  --tr-shadow-md: 0 8px 28px rgba(7, 21, 38, 0.45);
+  --tr-shadow-glow: 0 0 24px rgba(26, 214, 245, 0.28);
+}
+
+/* Light variant — apply to a region or the document */
+.theme-light,
+[data-theme="light"] {
+  --tr-bg: var(--tr-mist);
+  --tr-surface: var(--tr-core);
+  --tr-surface-2: var(--tr-neutral-100);
+  --tr-border: var(--tr-neutral-200);
+  --tr-text: var(--tr-ink);
+  --tr-text-secondary: var(--tr-neutral-600);
+  --tr-text-muted: var(--tr-neutral-500);
+  --tr-link: var(--tr-ice-deep);
+  --tr-primary: var(--tr-ice-deep);
+  --tr-primary-hover: var(--tr-ice-deep-hover);
+  --tr-on-primary: var(--tr-core);
+  --tr-focus-ring: rgba(0, 122, 148, 0.40);
+  --tr-accent: var(--tr-ice-deep);
+  --tr-accent-graphic: var(--tr-tracer-deep);
+  --tr-shadow-sm: 0 1px 2px rgba(10, 26, 44, 0.06);
+  --tr-shadow-md: 0 8px 24px rgba(10, 26, 44, 0.08);
+  --tr-shadow-glow: 0 0 20px rgba(0, 152, 184, 0.18);
+}
