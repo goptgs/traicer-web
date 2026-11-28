@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { advanceStep, frameCentre, removeClip, restoreClip, stepFrames } from "./editorUx.ts";
+import { advanceStep, frameCentre, removeClip, restoreClip, stepFrames, stepPrompt } from "./editorUx.ts";
 
 describe("stepFrames", () => {
   it("steps one frame at 29.97 and ten frames at 119.88", () => {
@@ -43,7 +43,10 @@ describe("advanceStep", () => {
     assert.equal(advanceStep("impact", "impact"), "landing");
     assert.equal(advanceStep("landing", "ball"), "landing");
     assert.equal(advanceStep("shape", "impact"), "shape");
-    assert.equal(advanceStep("landing", "draft"), "shape");
+    assert.equal(advanceStep("landing", "draft"), "render");
+    assert.equal(advanceStep("render", "draft"), "render");
     assert.equal(advanceStep("shape", "draft"), "shape");
+    assert.equal(stepPrompt("render"), "Step 4 of 4: Render");
+    assert.equal(stepPrompt("shape"), "Adjust shape");
   });
 });

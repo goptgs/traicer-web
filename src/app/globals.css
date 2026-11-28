@@ -1865,9 +1865,27 @@ input:-webkit-autofill {
     align-items: start;
   }
 
-  .edit-layout.is-focus {
-    grid-template-columns: 72px minmax(0, 1fr);
-  }
+  .try-page:has(.edit-layout.is-focus) {
+  padding: 0;
+}
+
+.try-page:has(.edit-layout.is-focus) > h1,
+.try-page:has(.edit-layout.is-focus) > .lede,
+.try-page:has(.edit-layout.is-focus) > .drop-zone {
+  display: none;
+}
+
+body:has(.edit-layout.is-focus) .site-footer {
+  display: none;
+}
+
+.edit-layout.is-focus {
+  height: calc(100dvh - var(--header-h) - 2px);
+  overflow: hidden;
+  margin-top: 0;
+  align-items: stretch;
+  grid-template-columns: 72px minmax(0, 1fr);
+}
 
   .edit-layout.is-focus .clip-list {
     overflow: hidden;
@@ -1914,8 +1932,25 @@ input:-webkit-autofill {
 
   .edit-layout.is-focus .stage-column {
     min-width: 0;
+    min-height: 0;
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
     position: relative;
     z-index: 1;
+  }
+
+  .edit-layout.is-focus .stage {
+    flex: 1 1 auto;
+    min-height: 0;
+    height: auto;
+    aspect-ratio: auto;
+  }
+
+  .edit-layout.is-focus .edit-panel {
+    flex: 0 1 auto;
+    max-height: 46%;
+    overflow: auto;
   }
 
   .edit-layout.is-focus .step-prompt {
@@ -1924,7 +1959,11 @@ input:-webkit-autofill {
   }
 
   .edit-layout.is-focus .edit-main {
-    grid-template-columns: minmax(0, 1fr) 280px;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    grid-template-columns: none;
   }
 }
 

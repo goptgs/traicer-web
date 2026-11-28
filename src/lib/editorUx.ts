@@ -1,4 +1,4 @@
-export type MarkStep = "ball" | "impact" | "landing" | "shape";
+export type MarkStep = "ball" | "impact" | "landing" | "render" | "shape";
 
 /** Frame n is shown by seeking to its centre, (n + 0.5) / fps. */
 export function frameIndex(time: number, fps: number): number {
@@ -38,8 +38,20 @@ export function medianFps(deltas: number[]): number | null {
 export function advanceStep(step: MarkStep, reason: "ball" | "impact" | "draft"): MarkStep {
   if (reason === "ball" && step === "ball") return "impact";
   if (reason === "impact" && step === "impact") return "landing";
-  if (reason === "draft" && step === "landing") return "shape";
+  if (reason === "draft" && step === "landing") return "render";
   return step;
+}
+
+export function stepPrompt(step: MarkStep): string {
+  if (step === "shape") return "Adjust shape";
+  const label = {
+    ball: "Find ball location",
+    impact: "Set the impact frame",
+    landing: "Mark the landing",
+    render: "Render",
+  }[step];
+  const n = { ball: 1, impact: 2, landing: 3, render: 4 }[step];
+  return `Step ${n} of 4: ${label}`;
 }
 
 export function removeClip<T extends { id: string }>(clips: T[], id: string, selectedId: string | null) {

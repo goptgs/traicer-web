@@ -36,7 +36,7 @@ import {
 } from "@/lib/traicerArc";
 import { CANT_PLAY_MESSAGE, PROBE_WAIT_MS, playbackGaveUp, probeDuration } from "@/lib/probeClip";
 import { renderInput as fitRenderInput } from "@/lib/renderInput";
-import { advanceStep, chooseFps, frameIndex, medianFps, removeClip, restoreClip, stepFrames, type MarkStep } from "@/lib/editorUx";
+import { advanceStep, chooseFps, frameIndex, medianFps, removeClip, restoreClip, stepFrames, stepPrompt, type MarkStep } from "@/lib/editorUx";
 import { parseTrajectory, rowsUntil, trailOpacity, type Trajectory } from "@/lib/trajectory";
 
 type Tool = MarkStep;
@@ -99,8 +99,6 @@ const SWATCHES = [
   { name: "Red", hex: "#FF5C76" },
 ] as const;
 
-const GRID = 4;
-
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -138,7 +136,6 @@ export function TryEditor() {
   const stageRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const magRef = useRef<HTMLCanvasElement>(null);
-  const resultRef = useRef<HTMLDivElement>(null);
   const hangTouched = useRef(false);
   const tokens = useRef<Record<string, number>>({});
   const aborts = useRef<Record<string, () => void>>({});
@@ -147,9 +144,8 @@ export function TryEditor() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [tool, setTool] = useState<Tool>("ball");
-  const [gridOn, setGridOn] = useState(false);
-  const [zoom, setZoom] = useState<{ col: number; row: number } | null>(null);
   const [mag, setMag] = useState<{ x: number; y: number; touch: boolean } | null>(null);
+  const [showResult, setShowResult] = useState(false);
   const [undo, setUndo] = useState<{ clip: Clip; index: number } | null>(null);
   const [measuredFps, setMeasuredFps] = useState<number | null>(null);
   const undoTimer = useRef<number | null>(null);
@@ -214,13 +210,6 @@ export function TryEditor() {
   }, [selected?.id]);
 
   useEffect(() => {
-    if (selected?.phase !== "done") return;
-    if (!selected.job?.playUrl && !selected.job?.downloadUrl) return;
-    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    resultRef.current?.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
-  }, [selected?.phase, selected?.job?.playUrl, selected?.job?.downloadUrl]);
-
-  useEffect(() => {
     const clipId = selected?.id;
     if (!clipId || frameReady) return;
     const timer = window.setTimeout(() => {
@@ -237,6 +226,7 @@ export function TryEditor() {
     const video = videoRef.current;
     if (!video || !("requestVideoFrameCallback" in video)) return;
     setMeasuredFps(null);
+    setShowResult(false);
     const deltas: number[] = [];
     let last = -1;
     let handle = 0;
@@ -440,6 +430,8 @@ export function TryEditor() {
       if (job.status === "done" && clipId === selectedId) {
         if (job.ball) setTool((step) => advanceStep(step, "ball"));
         if (kind === "trace") setTool((step) => advanceStep(step, "draft"));
+        if (kind === "update") setTool("render");
+        if (kind === "render" && (job.playUrl || job.downloadUrl)) setShowResult(true);
       }
       if (job.status === "done" || job.status === "error") return { job, fitId };
       await sleep(2000);
@@ -592,16 +584,8 @@ export function TryEditor() {
   function tap(event: PointerEvent<HTMLDivElement>) {
     const video = videoRef.current;
     const clip = selected;
-    if (!video || !clip || !clip.stepsOpen || !frameReady) return;
-    if (gridOn && !zoom) {
-      const point = framePoint(event.clientX, event.clientY, video.getBoundingClientRect(), video.videoWidth, video.videoHeight);
-      if (!point) return;
-      setZoom({
-        col: Math.min(GRID - 1, Math.floor(point.x * GRID)),
-        row: Math.min(GRID - 1, Math.floor(point.y * GRID)),
-      });
-      return;
-    }
+    if (!video || !clip || !clip.stepsOpen || !frameReady || showResult) return;
+    if (tool !== "ball" && tool !== "landing") return;
     const point = framePoint(
       event.clientX,
       event.clientY,
@@ -610,13 +594,15 @@ export function TryEditor() {
       video.videoHeight,
     );
     if (!point) return;
-    patch(clip.id, (current) => {
-      if (tool === "ball") return { ...current, points: { ...current.points, ball: point } };
-      if (tool === "impact") return current;
-      return { ...current, points: { ...current.points, landing: point }, landingTime: video.currentTime, hangOverride: false };
-    });
-    if (tool === "ball") setTool("impact");
-    if (zoom) setZoom(null);
+    if (tool === "ball") {
+      patch(clip.id, (current) => ({ ...current, points: { ...current.points, ball: point } }));
+      setTool("impact");
+      return;
+    }
+    const landingTime = video.currentTime;
+    const next = { ...clip, points: { ...clip.points, landing: point }, landingTime, hangOverride: false };
+    patch(clip.id, (current) => ({ ...current, points: { ...current.points, landing: point }, landingTime, hangOverride: false }));
+    if (clip.upload === "done" && clip.jobId) void traceClip(next);
   }
 
   function setImpact() {
@@ -630,7 +616,7 @@ export function TryEditor() {
   function drawMagnifier(event: PointerEvent<HTMLDivElement>) {
     const video = videoRef.current;
     const canvas = magRef.current;
-    if (!video || !canvas || !video.videoWidth || zoom || !selected?.stepsOpen) {
+    if (!video || !canvas || !video.videoWidth || !selected?.stepsOpen || showResult || (tool !== "ball" && tool !== "landing")) {
       setMag(null);
       return;
     }
@@ -847,10 +833,7 @@ export function TryEditor() {
           {selected ? (
             <div className="edit-main">
               <div className="stage-column">
-              <p className="step-prompt">
-                Step {["ball", "impact", "landing", "shape"].indexOf(tool) + 1} of 4:{" "}
-                {tool === "ball" ? "Find ball location" : tool === "impact" ? "Set the impact frame" : tool === "landing" ? "Mark the landing" : "Adjust the curve"}
-              </p>
+              <p className="step-prompt">{stepPrompt(tool)}</p>
               <div className="stage" ref={stageRef}>
                 <button
                   type="button"
@@ -868,28 +851,20 @@ export function TryEditor() {
                 >
                   Full screen
                 </button>
-                <div
-                  className="stage-media"
-                  style={
-                    zoom && content && videoRef.current
-                      ? {
-                          transform: "scale(4)",
-                          transformOrigin: `${((content.left + ((zoom.col + 0.5) / GRID) * content.width) / (videoRef.current.clientWidth || 1)) * 100}% ${((content.top + ((zoom.row + 0.5) / GRID) * content.height) / (videoRef.current.clientHeight || 1)) * 100}%`,
-                        }
-                      : undefined
-                  }
-                >
+                <div className="stage-media">
                   <video
-                    key={selected.id}
+                    key={showResult && (selected.job?.playUrl || selected.job?.downloadUrl) ? `${selected.id}-result` : selected.id}
                     ref={(node) => {
                       videoRef.current = node;
                       node?.setAttribute("playsinline", "");
                       node?.setAttribute("webkit-playsinline", "");
                     }}
                     className="frame-video"
-                    src={selected.url}
+                    src={showResult && (selected.job?.playUrl || selected.job?.downloadUrl) ? selected.job.playUrl || selected.job.downloadUrl : selected.url}
                     playsInline
                     muted
+                    controls={showResult}
+                    autoPlay={showResult}
                     preload="auto"
                     onLoadedMetadata={() => {
                       const video = videoRef.current;
@@ -925,41 +900,27 @@ export function TryEditor() {
                     onError={() => setFailedId(selected.id)}
                     onTimeUpdate={() => setTime(videoRef.current?.currentTime ?? 0)}
                   />
-                  <canvas ref={canvasRef} className="tracer-layer" hidden={!selected.tracerOn || !selected.trajectory} />
+                  <canvas ref={canvasRef} className="tracer-layer" hidden={showResult || !selected.tracerOn || !selected.trajectory} />
                   {content ? (
                     <div className="content-frame" style={{ left: content.left, top: content.top, width: content.width, height: content.height }}>
-                      {gridOn && !zoom
-                        ? Array.from({ length: GRID * GRID }, (_, index) => (
-                            <span
-                              key={index}
-                              className="grid-cell"
-                              style={{
-                                left: `${(index % GRID) * (100 / GRID)}%`,
-                                top: `${Math.floor(index / GRID) * (100 / GRID)}%`,
-                                width: `${100 / GRID}%`,
-                                height: `${100 / GRID}%`,
-                              }}
-                            />
-                          ))
-                        : null}
-                      {selected.points.ball ? (
+                      {selected.points.ball && !showResult ? (
                         <i className="marker is-ball" style={{ left: `${selected.points.ball.x * 100}%`, top: `${selected.points.ball.y * 100}%` }} />
                       ) : null}
-                      {selected.snappedBall ? (
+                      {selected.snappedBall && !showResult ? (
                         <i
                           className="marker is-found"
                           title="Ball found"
                           style={{ left: `${selected.snappedBall.x * 100}%`, top: `${selected.snappedBall.y * 100}%` }}
                         />
                       ) : null}
-                      {selected.points.impact ? (
+                      {selected.points.impact && !showResult ? (
                         <i
                           className="marker is-impact"
                           title="Impact"
                           style={{ left: `${selected.points.impact.x * 100}%`, top: `${selected.points.impact.y * 100}%` }}
                         />
                       ) : null}
-                      {selected.points.landing ? (
+                      {selected.points.landing && !showResult ? (
                         <i
                           className="marker is-landing"
                           style={{ left: `${selected.points.landing.x * 100}%`, top: `${selected.points.landing.y * 100}%` }}
@@ -967,6 +928,7 @@ export function TryEditor() {
                       ) : null}
                     </div>
                   ) : null}
+                  {!showResult ? (
                   <div
                     className={frameReady ? "tap-layer" : "tap-layer is-waiting"}
                     onPointerDown={(event) => {
@@ -977,7 +939,8 @@ export function TryEditor() {
                     onPointerMove={drawMagnifier}
                     onPointerLeave={() => setMag(null)}
                   />
-                  {content
+                  ) : null}
+                  {content && tool === "shape" && !showResult
                     ? (() => {
                         const shown = selected.preview ? curveHandles(selected.preview) : selected.handles;
                         if (!shown) return null;
@@ -1006,7 +969,7 @@ export function TryEditor() {
                   width={160}
                   height={160}
                   className={mag?.touch ? "magnifier" : "magnifier is-centred"}
-                  hidden={!mag || !selected.stepsOpen}
+                  hidden={!mag || (tool !== "ball" && tool !== "landing") || showResult}
                   style={mag ? { left: mag.touch ? mag.x + 16 : mag.x - 70, top: mag.touch ? mag.y - 80 : mag.y - 70 } : undefined}
                 />
                 {!frameReady && !playbackError ? (
@@ -1039,13 +1002,6 @@ export function TryEditor() {
                 Frame {frameIndex(time, chooseFps(selected.job?.fps, selected.trajectory?.fps, measuredFps))} · {clock(time)} / {clock(selected.duration)}
                 {uploadLabel(selected)}
               </p>
-              {gridOn ? (
-                <p className="zoom-strip" aria-label="Grid zoom">
-                  <span className={!zoom ? "is-on" : ""}>1 Grid</span>
-                  <span className={zoom ? "is-on" : ""}>2 Zoom 4×</span>
-                  <span>3 Tap</span>
-                </p>
-              ) : null}
               </div>
 
               <div className="edit-panel">
@@ -1075,44 +1031,52 @@ export function TryEditor() {
                     <Step n={3} title="Landing" done={Boolean(selected.points.landing)} onEdit={() => setTool("landing")} active={tool === "landing"}>
                       Scrub to the landing, then tap it.
                     </Step>
-                    <Step n={4} title="Shape" done={Boolean(selected.trajectory)} onEdit={() => setTool("shape")} active={tool === "shape"}>
-                      <p>Drag the apex or end point to adjust, then press Update curve.</p>
-                      <label className="hang">
-                        {selected.hang.toFixed(1)} s
-                        <input
-                          type="range"
-                          min={2}
-                          max={10}
-                          step={0.1}
-                          value={selected.hang}
-                          onChange={(event) => {
-                            hangTouched.current = true;
-                            const hang = Number(event.target.value);
-                            patch(selected.id, (clip) => ({ ...clip, hang, hangOverride: true }));
-                          }}
-                          onPointerUp={(event) => {
-                            if (!hangTouched.current || !selected.points.landing) return;
-                            hangTouched.current = false;
-                            const hang = Number(event.currentTarget.value);
-                            void traceClip({ ...selected, hang, hangOverride: true });
-                          }}
-                          onKeyUp={(event) => {
-                            if (!hangTouched.current || !selected.points.landing) return;
-                            hangTouched.current = false;
-                            const hang = Number(event.currentTarget.value);
-                            void traceClip({ ...selected, hang, hangOverride: true });
-                          }}
-                        />
-                      </label>
-                      {selected.trackedFrames === 0 ? (
-                        <p className="export-note">Couldn't track the ball's start, so the start direction is estimated.</p>
-                      ) : null}
-                      {selected.firstDraft ? (
-                        <button type="button" className="text-link" onClick={() => resetShape(selected.id)}>
-                          Reset shape
-                        </button>
-                      ) : null}
+                    <Step n={4} title="Render" done={selected.phase === "done"} onEdit={() => { setShowResult(false); setTool("render"); }} active={tool === "render"}>
+                      <p>The line is ready. Render it. Adjusting the shape is optional, after you have watched it.</p>
                     </Step>
+                    {tool === "shape" ? (
+                      <section className="step-card is-on">
+                        <div className="step-head">
+                          <span>Adjust shape</span>
+                        </div>
+                        <p>Drag the apex or end point, then press Update curve. Optional.</p>
+                        <label className="hang">
+                          {selected.hang.toFixed(1)} s
+                          <input
+                            type="range"
+                            min={2}
+                            max={10}
+                            step={0.1}
+                            value={selected.hang}
+                            onChange={(event) => {
+                              hangTouched.current = true;
+                              const hang = Number(event.target.value);
+                              patch(selected.id, (clip) => ({ ...clip, hang, hangOverride: true }));
+                            }}
+                            onPointerUp={(event) => {
+                              if (!hangTouched.current || !selected.points.landing) return;
+                              hangTouched.current = false;
+                              const hang = Number(event.currentTarget.value);
+                              void traceClip({ ...selected, hang, hangOverride: true });
+                            }}
+                            onKeyUp={(event) => {
+                              if (!hangTouched.current || !selected.points.landing) return;
+                              hangTouched.current = false;
+                              const hang = Number(event.currentTarget.value);
+                              void traceClip({ ...selected, hang, hangOverride: true });
+                            }}
+                          />
+                        </label>
+                        {selected.trackedFrames === 0 ? (
+                          <p className="export-note">Couldn't track the ball's start, so the start direction is estimated.</p>
+                        ) : null}
+                        {selected.firstDraft ? (
+                          <button type="button" className="text-link" onClick={() => resetShape(selected.id)}>
+                            Reset shape
+                          </button>
+                        ) : null}
+                      </section>
+                    ) : null}
                   </div>
                 ) : (
                   <ul className="step-summary">
@@ -1160,14 +1124,17 @@ export function TryEditor() {
                         aria-label={swatch.name}
                         aria-pressed={selected.colour.toLowerCase() === swatch.hex.toLowerCase()}
                         style={{ background: swatch.hex }}
-                        onClick={() => patch(selected.id, (clip) => ({ ...clip, colour: swatch.hex }))}
+                        onClick={() => {
+                          setCustom(swatch.hex);
+                          patch(selected.id, (clip) => ({ ...clip, colour: swatch.hex }));
+                        }}
                       />
                     ))}
                     <label className="custom-colour">
                       Custom
                       <input
                         type="color"
-                        value={/^#[0-9a-fA-F]{6}$/.test(custom) ? custom : "#2EE8FF"}
+                        value={/^#[0-9a-fA-F]{6}$/.test(selected.colour) ? selected.colour : /^#[0-9a-fA-F]{6}$/.test(custom) ? custom : "#2EE8FF"}
                         onChange={(event) => {
                           setCustom(event.target.value);
                           patch(selected.id, (clip) => ({ ...clip, colour: event.target.value }));
@@ -1197,17 +1164,6 @@ export function TryEditor() {
                     onChange={(event) => patch(selected.id, (clip) => ({ ...clip, portrait: event.target.checked }))}
                   />
                   9:16 as well as 16:9. The portrait crop follows the ball.
-                </label>
-                <label className="check-row">
-                  <input
-                    type="checkbox"
-                    checked={gridOn}
-                    onChange={(event) => {
-                      setGridOn(event.target.checked);
-                      if (!event.target.checked) setZoom(null);
-                    }}
-                  />
-                  Precision grid
                 </label>
                 <label className="check-row">
                   <input
@@ -1274,9 +1230,32 @@ export function TryEditor() {
                   )}
                   {selected.preview ? <p className="export-note">Update curve first</p> : null}
                   {selected.trajectory ? (
-                    <button type="button" className="btn btn-secondary" onClick={() => patch(selected.id, (clip) => ({ ...clip, stepsOpen: true, phase: clip.phase === "done" ? "draft" : clip.phase }))}>
-                      Redo tracer
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => {
+                        setShowResult(false);
+                        setTool("shape");
+                        patch(selected.id, (clip) => ({ ...clip, stepsOpen: true }));
+                      }}
+                    >
+                      Adjust shape
                     </button>
+                  ) : null}
+                  {selected.job?.playUrl || selected.job?.downloadUrl ? (
+                    <button type="button" className="btn btn-secondary" onClick={() => setShowResult((on) => !on)}>
+                      {showResult ? "Edit" : "Result"}
+                    </button>
+                  ) : null}
+                  {selected.job?.downloadUrl ? (
+                    <a className="btn btn-secondary" href={selected.job.downloadUrl}>
+                      Download 16:9
+                    </a>
+                  ) : null}
+                  {selected.job?.vertical?.downloadUrl ? (
+                    <a className="btn btn-secondary" href={selected.job.vertical.downloadUrl}>
+                      Download 9:16
+                    </a>
                   ) : null}
                 </div>
 
@@ -1306,35 +1285,6 @@ export function TryEditor() {
                   </p>
                 ) : null}
 
-                <div ref={resultRef}>
-                  {selected.phase === "done" && (selected.job?.playUrl || selected.job?.downloadUrl) ? (
-                    <div className="trace-result">
-                      <video
-                        src={selected.job.playUrl || selected.job.downloadUrl}
-                        autoPlay
-                        muted
-                        controls
-                        playsInline
-                        ref={(node) => {
-                          node?.setAttribute("playsinline", "");
-                          node?.setAttribute("webkit-playsinline", "");
-                        }}
-                      />
-                      <div className="hero-actions">
-                        {selected.job.downloadUrl ? (
-                          <a className="btn btn-primary" href={selected.job.downloadUrl}>
-                            Download 16:9
-                          </a>
-                        ) : null}
-                        {selected.job.vertical?.downloadUrl ? (
-                          <a className="btn btn-secondary" href={selected.job.vertical.downloadUrl}>
-                            Download 9:16
-                          </a>
-                        ) : null}
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
               </div>
             </div>
           ) : null}
