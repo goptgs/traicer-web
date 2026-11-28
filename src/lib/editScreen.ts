@@ -37,6 +37,14 @@ export function isTapStep(step: EditStep): boolean {
   return step === "ball" || step === "landing";
 }
 
+export function clipStatusLabel(input: { ball: boolean; impact: boolean; drafted: boolean; rendered: boolean }): string {
+  if (input.rendered) return "Rendered";
+  if (input.drafted) return "Drafted";
+  if (input.impact) return "Impact set";
+  if (input.ball) return "Ball set";
+  return "Not started";
+}
+
 export function backStep(step: EditStep): EditStep | null {
   const index = ORDER.indexOf(step);
   if (index <= 0) return null;

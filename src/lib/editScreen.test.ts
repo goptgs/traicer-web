@@ -10,6 +10,7 @@ import {
   creditLabel,
   exportCredits,
   hangReadout,
+  clipStatusLabel,
   impactFrameDelta,
   instruction,
   isTapStep,
@@ -95,6 +96,14 @@ describe("states", () => {
     assert.equal(canOpenStep("landing", ready), true);
     assert.equal(canOpenStep("shape", { ...ready, rendered: false }), false);
     assert.equal(canOpenStep("render", { ball: true, impact: true, landing: false, rendered: false }), false);
+  });
+
+  it("names clip progress from the markings", () => {
+    assert.equal(clipStatusLabel({ ball: false, impact: false, drafted: false, rendered: false }), "Not started");
+    assert.equal(clipStatusLabel({ ball: true, impact: false, drafted: false, rendered: false }), "Ball set");
+    assert.equal(clipStatusLabel({ ball: true, impact: true, drafted: false, rendered: false }), "Impact set");
+    assert.equal(clipStatusLabel({ ball: true, impact: true, drafted: true, rendered: false }), "Drafted");
+    assert.equal(clipStatusLabel({ ball: true, impact: true, drafted: true, rendered: true }), "Rendered");
   });
 
   it("12 a wrong clip is removed or replaced by adding one, with no swap", () => {

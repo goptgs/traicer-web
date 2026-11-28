@@ -10,3 +10,5 @@ out/
 .dev.vars
 *.log
 tsconfig.tsbuildinfo
+test-results/
+playwright-report/

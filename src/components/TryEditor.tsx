@@ -42,6 +42,7 @@ import {
   UNDO_MS,
   backStep,
   canOpenStep,
+  clipStatusLabel,
   creditLabel,
   hangReadout,
   instruction,
@@ -105,6 +106,7 @@ type Clip = {
   tracerOn: boolean;
   step: Tool;
   hangFitted: boolean;
+  poster: string | null;
 };
 
 const SWATCHES = [
@@ -185,6 +187,7 @@ export function TryEditor() {
 
   const clipsRef = useRef(clips);
   clipsRef.current = clips;
+  const gesture = useRef<number | null>(null);
   const [frame, setFrame] = useState({ width: 1280, height: 800 });
   useEffect(() => {
     const read = () => setFrame({ width: window.innerWidth, height: window.innerHeight });
@@ -646,6 +649,7 @@ export function TryEditor() {
         hangOverride: saved?.hangOverride ?? false,
         hangFitted: saved?.hangFitted ?? false,
         step: saved?.step ?? "ball",
+        poster: null,
         colour: saved?.colour ?? "#2EE8FF",
         busy: null,
         fitId: null,
@@ -694,28 +698,44 @@ export function TryEditor() {
     }
   }
 
-  function tap(event: PointerEvent<HTMLDivElement>) {
+  const placeAt = useRef<(clientX: number, clientY: number) => void>(() => {});
+  placeAt.current = (clientX, clientY) => {
     const video = videoRef.current;
-    const clip = selected;
-    if (!video || !clip || !clip.stepsOpen || !frameReady || showResult) return;
+    const clip = clipsRef.current.find((item) => item.id === selectedId) ?? null;
+    if (!video || !clip || !clip.stepsOpen || readyId !== clip.id || showResult) return;
     if (tool !== "ball" && tool !== "landing") return;
-    const point = framePoint(
-      event.clientX,
-      event.clientY,
-      video.getBoundingClientRect(),
-      video.videoWidth,
-      video.videoHeight,
-    );
+    const point = framePoint(clientX, clientY, video.getBoundingClientRect(), video.videoWidth, video.videoHeight);
     if (!point) return;
     if (tool === "ball") {
-      patch(clip.id, (current) => ({ ...current, points: { ...current.points, ball: point } }));
+      patch(clip.id, (current) => ({ ...current, points: { ...current.points, ball: point }, step: "impact" }));
       setTool("impact");
       return;
     }
     const landingTime = video.currentTime;
     const next = { ...clip, points: { ...clip.points, landing: point }, landingTime, hangOverride: false };
-    patch(clip.id, (current) => ({ ...current, points: { ...current.points, landing: point }, landingTime, hangOverride: false }));
+    patch(clip.id, (current) => ({
+      ...current,
+      points: { ...current.points, landing: point },
+      landingTime,
+      hangOverride: false,
+    }));
     if (clip.upload === "done" && clip.jobId) void traceClip(next);
+  };
+
+  function beginTap(event: PointerEvent<HTMLDivElement>) {
+    if (tool !== "ball" && tool !== "landing") return;
+    event.preventDefault();
+    const pointerId = event.pointerId;
+    gesture.current = pointerId;
+    const finish = (up: globalThis.PointerEvent) => {
+      if (up.pointerId !== pointerId || gesture.current !== pointerId) return;
+      gesture.current = null;
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", finish);
+      placeAt.current(up.clientX, up.clientY);
+    };
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", finish);
   }
 
   function setImpact() {
@@ -775,6 +795,7 @@ export function TryEditor() {
       hangOverride: false,
       hangFitted: false,
       step: "ball",
+      poster: clip.poster,
       busy: null,
       fitId: null,
       trackedFrames: null,
@@ -1045,9 +1066,15 @@ export function TryEditor() {
                 onClick={() => selectClip(clip)}
                 title={clip.name}
               >
-                <video src={clip.url} muted playsInline preload="metadata" tabIndex={-1} />
+                {clip.poster ? <img src={clip.poster} alt="" /> : <span className="thumb-blank" />}
                 <span>
-                  Clip {index + 1} · {clip.phase === "done" ? "Rendered" : clip.phase === "draft" ? "Draft" : clip.points.landing ? "Editing" : "Not started"}
+                  Clip {index + 1} ·{" "}
+                  {clipStatusLabel({
+                    ball: Boolean(clip.points.ball || clip.snappedBall),
+                    impact: clip.impactTime != null,
+                    drafted: clip.phase === "draft" || Boolean(clip.trajectory) || Boolean(clip.fitId),
+                    rendered: clip.phase === "done",
+                  })}
                 </span>
               </button>
               <button type="button" className="clip-x" aria-label={`Remove ${clip.name}`} onClick={() => deleteClip(clip.id)}>
@@ -1132,6 +1159,15 @@ export function TryEditor() {
                   onCanPlay={() => setReadyId(selected.id)}
                   onLoadedData={() => {
                     setReadyId(selected.id);
+                    const shot = videoRef.current;
+                    if (shot?.videoWidth && !selected.poster) {
+                      const canvas = document.createElement("canvas");
+                      canvas.width = 160;
+                      canvas.height = Math.max(1, Math.round((160 * shot.videoHeight) / shot.videoWidth));
+                      canvas.getContext("2d")?.drawImage(shot, 0, 0, canvas.width, canvas.height);
+                      const poster = canvas.toDataURL("image/jpeg", 0.72);
+                      patch(selected.id, (clip) => (clip.poster ? clip : { ...clip, poster }));
+                    }
                     const video = videoRef.current;
                     if (!video || video.currentTime !== 0) return;
                     try {
@@ -1163,11 +1199,7 @@ export function TryEditor() {
                 {isTapStep(tool) && !showResult ? (
                   <div
                     className={frameReady ? "tap-layer" : "tap-layer is-waiting"}
-                    onPointerDown={(event) => {
-                      event.preventDefault();
-                      event.currentTarget.setPointerCapture(event.pointerId);
-                    }}
-                    onPointerUp={tap}
+                    onPointerDown={beginTap}
                     onPointerMove={drawMagnifier}
                     onPointerLeave={() => setMag(null)}
                   />
