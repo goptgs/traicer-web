@@ -47,6 +47,7 @@ export type Job = {
   vertical?: VerticalOutput;
   fitId?: string;
   trackedFrames?: number;
+  fps?: number;
 };
 
 export type UploadTicket = {
@@ -274,6 +275,7 @@ export async function getJob(base: string, jobId: string, fetchImpl: typeof fetc
     ball: isPoint(body.ball) ? body.ball : undefined,
     fitId: typeof body.fitId === "string" ? body.fitId : undefined,
     trackedFrames: typeof body.trackedFrames === "number" ? body.trackedFrames : undefined,
+    fps: typeof body.fps === "number" && body.fps > 1 ? body.fps : undefined,
     trajectory: body.trajectory,
     trajectoryUrl: typeof body.trajectoryUrl === "string" ? body.trajectoryUrl : undefined,
     vertical:

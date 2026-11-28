@@ -36,9 +36,10 @@ import {
 } from "@/lib/traicerArc";
 import { CANT_PLAY_MESSAGE, PROBE_WAIT_MS, playbackGaveUp, probeDuration } from "@/lib/probeClip";
 import { renderInput as fitRenderInput } from "@/lib/renderInput";
+import { advanceStep, chooseFps, frameIndex, medianFps, removeClip, restoreClip, stepFrames, type MarkStep } from "@/lib/editorUx";
 import { parseTrajectory, rowsUntil, trailOpacity, type Trajectory } from "@/lib/trajectory";
 
-type Tool = "ball" | "impact" | "landing";
+type Tool = MarkStep;
 type Points = { ball: NormPoint | null; impact: NormPoint | null; landing: NormPoint | null };
 type Busy = "trace" | "update" | "render" | null;
 
@@ -148,7 +149,10 @@ export function TryEditor() {
   const [tool, setTool] = useState<Tool>("ball");
   const [gridOn, setGridOn] = useState(false);
   const [zoom, setZoom] = useState<{ col: number; row: number } | null>(null);
-  const [mag, setMag] = useState<{ x: number; y: number } | null>(null);
+  const [mag, setMag] = useState<{ x: number; y: number; touch: boolean } | null>(null);
+  const [undo, setUndo] = useState<{ clip: Clip; index: number } | null>(null);
+  const [measuredFps, setMeasuredFps] = useState<number | null>(null);
+  const undoTimer = useRef<number | null>(null);
   const [time, setTime] = useState(0);
   const [resetId, setResetId] = useState<string | null>(null);
   const [upgrade, setUpgrade] = useState<string | null>(null);
@@ -228,6 +232,53 @@ export function TryEditor() {
     }, PROBE_WAIT_MS);
     return () => window.clearTimeout(timer);
   }, [selected?.id, frameReady]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !("requestVideoFrameCallback" in video)) return;
+    setMeasuredFps(null);
+    const deltas: number[] = [];
+    let last = -1;
+    let handle = 0;
+    const onFrame: VideoFrameRequestCallback = (_now, meta) => {
+      if (last >= 0) {
+        const delta = meta.mediaTime - last;
+        if (delta > 0) deltas.push(delta);
+        if (deltas.length > 8) deltas.shift();
+        const fps = medianFps(deltas);
+        if (fps) setMeasuredFps(fps);
+      }
+      last = meta.mediaTime;
+      handle = video.requestVideoFrameCallback(onFrame);
+    };
+    handle = video.requestVideoFrameCallback(onFrame);
+    return () => video.cancelVideoFrameCallback(handle);
+  }, [selected?.id]);
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
+      if (event.key === "Enter" && tool === "impact") {
+        event.preventDefault();
+        setImpact();
+        return;
+      }
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      const video = videoRef.current;
+      if (!video) return;
+      event.preventDefault();
+      if (!video.paused) video.pause();
+      const fps = chooseFps(selected?.job?.fps, selected?.trajectory?.fps, measuredFps);
+      const delta = (event.shiftKey ? 10 : 1) * (event.key === "ArrowLeft" ? -1 : 1);
+      const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : undefined;
+      const next = stepFrames(video.currentTime, fps, delta, duration);
+      video.currentTime = next;
+      setTime(next);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [tool, selected?.id, selected?.job?.fps, selected?.trajectory?.fps, measuredFps]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -316,9 +367,9 @@ export function TryEditor() {
     const landing = handles ? { x: handles.end.x, y: handles.end.y } : clip.points.landing;
     const body: RenderInput = { outputs: [], color: apiColour(clip.colour) };
     if (landing) body.landing = landing;
-    const ball = clip.points.impact ?? clip.points.ball;
+    const ball = clip.points.ball ?? clip.snappedBall;
     if (ball) body.ball = ball;
-    if (clip.points.impact && clip.impactTime != null) body.impactTime = clip.impactTime;
+    if (clip.impactTime != null) body.impactTime = clip.impactTime;
     if (handles) {
       body.apex = { x: handles.apex.x, y: handles.apex.y, t: handles.apex.t };
       body.end = { x: handles.end.x, y: handles.end.y, t: handles.end.t };
@@ -386,6 +437,7 @@ export function TryEditor() {
           firstDraft: clip.firstDraft ?? (fresh ? snapshot : null),
         };
       });
+      if (job.status === "done" && job.ball && clipId === selectedId) setTool((step) => advanceStep(step, "ball"));
       if (job.status === "done" || job.status === "error") return { job, fitId };
       await sleep(2000);
     }
@@ -555,13 +607,21 @@ export function TryEditor() {
       video.videoHeight,
     );
     if (!point) return;
-    const at = video.currentTime;
     patch(clip.id, (current) => {
       if (tool === "ball") return { ...current, points: { ...current.points, ball: point } };
-      if (tool === "impact") return { ...current, points: { ...current.points, impact: point }, impactTime: at };
-      return { ...current, points: { ...current.points, landing: point }, landingTime: at, hangOverride: false };
+      if (tool === "impact") return current;
+      return { ...current, points: { ...current.points, landing: point }, landingTime: video.currentTime, hangOverride: false };
     });
+    if (tool === "ball") setTool("impact");
     if (zoom) setZoom(null);
+  }
+
+  function setImpact() {
+    const video = videoRef.current;
+    const clip = selected;
+    if (!video || !clip) return;
+    patch(clip.id, (current) => ({ ...current, impactTime: video.currentTime }));
+    setTool((step) => advanceStep(step, "impact"));
   }
 
   function drawMagnifier(event: PointerEvent<HTMLDivElement>) {
@@ -584,7 +644,11 @@ export function TryEditor() {
     }
     const stage = stageRef.current?.getBoundingClientRect();
     if (!stage) return;
-    setMag({ x: event.clientX - stage.left, y: event.clientY - stage.top });
+    setMag({
+      x: event.clientX - stage.left,
+      y: event.clientY - stage.top,
+      touch: event.pointerType === "touch",
+    });
     const ctx = canvas.getContext("2d");
     const box = measureContent();
     if (!ctx || !box) return;
@@ -663,6 +727,35 @@ export function TryEditor() {
     });
   }
 
+  function deleteClip(id: string) {
+    tokens.current[id] = -1;
+    aborts.current[id]?.();
+    const result = removeClip(clips, id, selectedId);
+    if (!result.removed) return;
+    if (undo && undo.clip.id !== id) URL.revokeObjectURL(undo.clip.url);
+    if (undoTimer.current) window.clearTimeout(undoTimer.current);
+    setClips(result.clips);
+    setSelectedId(result.selectedId);
+    setUndo(result.removed);
+    undoTimer.current = window.setTimeout(() => {
+      setUndo((toast) => {
+        if (toast?.clip.id !== id) return toast;
+        URL.revokeObjectURL(toast.clip.url);
+        return null;
+      });
+    }, 5000);
+  }
+
+  function undoDelete() {
+    setUndo((current) => {
+      if (!current) return null;
+      if (undoTimer.current) window.clearTimeout(undoTimer.current);
+      setClips((clips) => restoreClip(clips, current));
+      setSelectedId(current.clip.id);
+      return null;
+    });
+  }
+
   function traceAll() {
     for (const clip of clips) {
       if (clip.upload === "done" && clip.points.landing && clip.phase !== "drafting" && clip.phase !== "rendering" && !clip.busy) {
@@ -718,7 +811,7 @@ export function TryEditor() {
       ) : null}
 
       {clips.length > 0 ? (
-        <div className="edit-layout">
+        <div className={selected?.stepsOpen ? "edit-layout is-focus" : "edit-layout"}>
           <aside className="clip-list">
             <h2>Clips ({clips.length})</h2>
             <ul>
@@ -726,6 +819,7 @@ export function TryEditor() {
                 <li key={clip.id}>
                   <button
                     type="button"
+                    className="clip-select"
                     aria-current={clip.id === selectedId ? "true" : undefined}
                     onClick={() => setSelectedId(clip.id)}
                   >
@@ -733,6 +827,9 @@ export function TryEditor() {
                     <span>
                       {clock(clip.duration)} · {clipStatus(clip)}
                     </span>
+                  </button>
+                  <button type="button" className="clip-remove" aria-label={`Remove ${clip.name}`} onClick={() => deleteClip(clip.id)}>
+                    ×
                   </button>
                 </li>
               ))}
@@ -745,7 +842,27 @@ export function TryEditor() {
           {selected ? (
             <div className="edit-main">
               <div className="stage-column">
+              <p className="step-prompt">
+                Step {["ball", "impact", "landing", "shape"].indexOf(tool) + 1} of 4:{" "}
+                {tool === "ball" ? "Find ball location" : tool === "impact" ? "Set the impact frame" : tool === "landing" ? "Mark the landing" : "Adjust the curve"}
+              </p>
               <div className="stage" ref={stageRef}>
+                <button
+                  type="button"
+                  className="stage-full"
+                  onClick={() => {
+                    const node = stageRef.current as (HTMLDivElement & { webkitRequestFullscreen?: () => void }) | null;
+                    const doc = document as Document & { webkitFullscreenElement?: Element | null; webkitExitFullscreen?: () => void };
+                    if (!node) return;
+                    if (document.fullscreenElement || doc.webkitFullscreenElement) {
+                      void (document.exitFullscreen?.() ?? doc.webkitExitFullscreen?.());
+                    } else {
+                      void (node.requestFullscreen?.() ?? node.webkitRequestFullscreen?.());
+                    }
+                  }}
+                >
+                  Full screen
+                </button>
                 <div
                   className="stage-media"
                   style={
@@ -883,9 +1000,9 @@ export function TryEditor() {
                   ref={magRef}
                   width={160}
                   height={160}
-                  className="magnifier"
+                  className={mag?.touch ? "magnifier" : "magnifier is-centred"}
                   hidden={!mag || !selected.stepsOpen}
-                  style={mag ? { left: mag.x + 16, top: mag.y - 80 } : undefined}
+                  style={mag ? { left: mag.touch ? mag.x + 16 : mag.x - 70, top: mag.touch ? mag.y - 80 : mag.y - 70 } : undefined}
                 />
                 {!frameReady && !playbackError ? (
                   <p className="loading-clip" role="status">
@@ -914,7 +1031,7 @@ export function TryEditor() {
                 />
               </label>
               <p className="export-note">
-                Frame {Math.round(time * 30)} · {clock(time)} / {clock(selected.duration)}
+                Frame {frameIndex(time, chooseFps(selected.job?.fps, selected.trajectory?.fps, measuredFps))} · {clock(time)} / {clock(selected.duration)}
                 {uploadLabel(selected)}
               </p>
               {gridOn ? (
@@ -936,20 +1053,25 @@ export function TryEditor() {
                 {selected.stepsOpen ? (
                   <div className="step-cards">
                     <Step
-                      title="Ball"
+                      n={1}
+                      title="Find ball location"
                       done={Boolean(selected.points.ball || selected.snappedBall)}
                       onEdit={() => setTool("ball")}
                       active={tool === "ball"}
                     >
-                      Optional, we'll find it. Tap near the ball.
+                      We can find it automatically, and you can tap near the ball to speed it up.
                     </Step>
-                    <Step title="Impact" done={selected.impactTime != null} onEdit={() => setTool("impact")} active={tool === "impact"}>
-                      Scrub to the impact, then tap the ball.
+                    <Step n={2} title="Set impact" done={selected.impactTime != null} onEdit={() => setTool("impact")} active={tool === "impact"}>
+                      Scrub to the strike, then set that frame. Enter works too.
+                      <button type="button" className="btn btn-primary" onClick={setImpact}>
+                        Set impact
+                      </button>
                     </Step>
-                    <Step title="Landing" done={Boolean(selected.points.landing)} onEdit={() => setTool("landing")} active={tool === "landing"}>
+                    <Step n={3} title="Landing" done={Boolean(selected.points.landing)} onEdit={() => setTool("landing")} active={tool === "landing"}>
                       Scrub to the landing, then tap it.
                     </Step>
-                    <Step title="Hang time" done onEdit={() => undefined} active={false}>
+                    <Step n={4} title="Shape" done={Boolean(selected.trajectory)} onEdit={() => setTool("shape")} active={tool === "shape"}>
+                      <p>Drag the apex or end point to adjust, then press Update curve.</p>
                       <label className="hang">
                         {selected.hang.toFixed(1)} s
                         <input
@@ -977,9 +1099,6 @@ export function TryEditor() {
                           }}
                         />
                       </label>
-                    </Step>
-                    <Step title="Shape" done={Boolean(selected.trajectory)} onEdit={() => undefined} active={false}>
-                      <p>Drag the apex or end point to adjust, then press Update curve.</p>
                       {selected.trackedFrames === 0 ? (
                         <p className="export-note">Couldn't track the ball's start, so the start direction is estimated.</p>
                       ) : null}
@@ -1012,7 +1131,7 @@ export function TryEditor() {
                     </li>
                     <li>
                       Hang {selected.hang.toFixed(1)}s{" "}
-                      <button type="button" className="edit-chip" onClick={() => patch(selected.id, (clip) => ({ ...clip, stepsOpen: true }))}>
+                      <button type="button" className="edit-chip" onClick={() => { patch(selected.id, (clip) => ({ ...clip, stepsOpen: true })); setTool("shape"); }}>
                         Edit
                       </button>
                     </li>
@@ -1217,6 +1336,15 @@ export function TryEditor() {
         </div>
       ) : null}
 
+      {undo ? (
+        <div className="undo-toast" role="status">
+          <span>{undo.clip.name} removed.</span>
+          <button type="button" className="btn btn-secondary btn-sm" onClick={undoDelete}>
+            Undo
+          </button>
+        </div>
+      ) : null}
+
       {resetId ? (
         <div className="modal-backdrop" onMouseDown={() => setResetId(null)}>
           <div className="modal confirm" role="dialog" aria-modal="true" aria-labelledby="reset-title" onMouseDown={(event) => event.stopPropagation()}>
@@ -1289,30 +1417,31 @@ function uploadLabel(clip: Clip): string {
 }
 
 function Step({
+  n,
   title,
   done,
   active,
   onEdit,
   children,
 }: {
+  n: number;
   title: string;
   done: boolean;
   active: boolean;
   onEdit: () => void;
   children: ReactNode;
 }) {
+  const tone = active ? "is-on" : done ? "is-done" : "is-dim";
   return (
-    <section className={active ? "step-card is-on" : "step-card"}>
+    <section className={`step-card ${tone}`}>
       <div className="step-head">
-        <span>
-          {done ? "✓ " : ""}
-          {title}
-        </span>
+        <span className="step-num" aria-hidden="true">{done && !active ? "✓" : n}</span>
+        <span>{title}</span>
         <button type="button" className="edit-chip" onClick={onEdit}>
           Edit
         </button>
       </div>
-      <div>{children}</div>
+      {active ? <div>{children}</div> : null}
     </section>
   );
 }
