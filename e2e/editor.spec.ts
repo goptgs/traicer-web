@@ -171,3 +171,63 @@ test("marks a real clip through landing, render, shape, and a second render", as
   await expect(page.getByRole("link", { name: "Export" })).toBeVisible();
   await expect(page.locator("video")).toHaveCount(1);
 });
+
+test("landing click after a seek on a 4K 120fps clip", async ({ page }) => {
+  const fourK = "/tmp/e2e-4k120.mp4";
+  execFileSync("ffmpeg", [
+    "-y",
+    "-f",
+    "lavfi",
+    "-i",
+    "testsrc=size=3840x2160:rate=120:duration=2",
+    "-c:v",
+    "libx264",
+    "-preset",
+    "ultrafast",
+    "-pix_fmt",
+    "yuv420p",
+    "-movflags",
+    "+faststart",
+    fourK,
+  ]);
+  const bodies: unknown[] = [];
+  await page.addInitScript(() => localStorage.clear());
+  await installApi(page, bodies);
+  await page.goto("/try");
+  await page.locator("input[type=file]").setInputFiles(fourK);
+  await page.waitForFunction(() => (document.querySelector(".stage video") as HTMLVideoElement | null)?.videoWidth === 3840);
+  await page.waitForFunction(() => document.querySelector(".edit-app")?.getAttribute("data-upload") === "done");
+  await page.waitForFunction(() => document.querySelector(".tap-layer") && !document.querySelector(".tap-layer.is-waiting"));
+  await expect(page.locator("video")).toHaveCount(1);
+
+  const tapAt = async (nx: number, ny: number) => {
+    const box = await page.locator(".tap-layer, .stage-media").first().boundingBox();
+    if (!box) throw new Error("no tap target");
+    return { x: box.x + nx * box.width, y: box.y + ny * box.height };
+  };
+  const ball = await tapAt(0.4905, 0.5897);
+  await page.touchscreen.tap(ball.x, ball.y);
+  await expect(page.getByText("Clip 1 · Ball set")).toBeVisible();
+  await page.getByRole("button", { name: "Set impact", exact: true }).click();
+  await expect(page.getByText("Tap where the ball landed.")).toBeVisible();
+
+  await page.evaluate(async () => {
+    const video = document.querySelector(".stage video") as HTMLVideoElement;
+    video.pause();
+    video.currentTime = 10.28;
+    await new Promise((resolve) => {
+      video.onseeked = () => resolve(null);
+      setTimeout(resolve, 4000);
+    });
+  });
+  await page.waitForTimeout(250);
+  const landing = await tapAt(0.5022, 0.5195);
+  await page.mouse.move(landing.x, landing.y);
+  await expect(page.locator(".magnifier:not([hidden])")).toBeVisible();
+  await page.mouse.down();
+  await page.mouse.up();
+  await expect(page.locator(".marker.is-landing")).toBeVisible();
+  await expect.poll(() => bodies.some((body) => JSON.stringify(body).includes('"outputs":[]'))).toBe(true);
+  await expect(page.getByText("Clip 1 · Drafted")).toBeVisible();
+  await expect(page.locator("video")).toHaveCount(1);
+});

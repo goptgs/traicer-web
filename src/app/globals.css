@@ -2283,6 +2283,8 @@ body:has(.edit-app) main {
 
 .edit-app .tap-layer {
   z-index: 2;
+  background: rgba(0, 0, 0, 0.001);
+  touch-action: none;
 }
 
 .edit-app .stage-full {

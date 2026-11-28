@@ -188,6 +188,7 @@ export function TryEditor() {
   const clipsRef = useRef(clips);
   clipsRef.current = clips;
   const gesture = useRef<number | null>(null);
+  const videoSize = useRef({ width: 0, height: 0 });
   const [frame, setFrame] = useState({ width: 1280, height: 800 });
   useEffect(() => {
     const read = () => setFrame({ width: window.innerWidth, height: window.innerHeight });
@@ -704,7 +705,10 @@ export function TryEditor() {
     const clip = clipsRef.current.find((item) => item.id === selectedId) ?? null;
     if (!video || !clip || !clip.stepsOpen || readyId !== clip.id || showResult) return;
     if (tool !== "ball" && tool !== "landing") return;
-    const point = framePoint(clientX, clientY, video.getBoundingClientRect(), video.videoWidth, video.videoHeight);
+    if (video.videoWidth > 0 && video.videoHeight > 0) videoSize.current = { width: video.videoWidth, height: video.videoHeight };
+    const width = video.videoWidth || videoSize.current.width;
+    const height = video.videoHeight || videoSize.current.height;
+    const point = framePoint(clientX, clientY, video.getBoundingClientRect(), width, height);
     if (!point) return;
     if (tool === "ball") {
       patch(clip.id, (current) => ({ ...current, points: { ...current.points, ball: point }, step: "impact" }));
@@ -722,21 +726,27 @@ export function TryEditor() {
     if (clip.upload === "done" && clip.jobId) void traceClip(next);
   };
 
-  function beginTap(event: PointerEvent<HTMLDivElement>) {
-    if (tool !== "ball" && tool !== "landing") return;
-    event.preventDefault();
-    const pointerId = event.pointerId;
-    gesture.current = pointerId;
-    const finish = (up: globalThis.PointerEvent) => {
-      if (up.pointerId !== pointerId || gesture.current !== pointerId) return;
-      gesture.current = null;
-      window.removeEventListener("pointerup", finish);
-      window.removeEventListener("pointercancel", finish);
-      placeAt.current(up.clientX, up.clientY);
-    };
-    window.addEventListener("pointerup", finish);
-    window.addEventListener("pointercancel", finish);
-  }
+  useEffect(() => {
+    function onDown(event: globalThis.PointerEvent) {
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest("button, a, input, textarea, select, label")) return;
+      const pointerId = event.pointerId;
+      const origin = { x: event.clientX, y: event.clientY };
+      gesture.current = pointerId;
+      const finish = (up: globalThis.PointerEvent) => {
+        if (up.pointerId !== pointerId) return;
+        window.removeEventListener("pointerup", finish);
+        window.removeEventListener("pointercancel", finish);
+        if (gesture.current !== pointerId) return;
+        gesture.current = null;
+        placeAt.current(origin.x, origin.y);
+      };
+      window.addEventListener("pointerup", finish);
+      window.addEventListener("pointercancel", finish);
+    }
+    window.addEventListener("pointerdown", onDown, true);
+    return () => window.removeEventListener("pointerdown", onDown, true);
+  }, []);
 
   function setImpact() {
     const video = videoRef.current;
@@ -1199,7 +1209,6 @@ export function TryEditor() {
                 {isTapStep(tool) && !showResult ? (
                   <div
                     className={frameReady ? "tap-layer" : "tap-layer is-waiting"}
-                    onPointerDown={beginTap}
                     onPointerMove={drawMagnifier}
                     onPointerLeave={() => setMag(null)}
                   />
