@@ -44,6 +44,7 @@ import {
   canOpenStep,
   clipStatusLabel,
   creditLabel,
+  landingTapDecision,
   hangReadout,
   instruction,
   isTapStep,
@@ -166,6 +167,7 @@ export function TryEditor() {
   const [mag, setMag] = useState<{ x: number; y: number; touch: boolean } | null>(null);
   const [showResult, setShowResult] = useState(false);
   const [paused, setPaused] = useState(true);
+  const [tapReject, setTapReject] = useState<string | null>(null);
   const [sessionSaved, setSessionSaved] = useState(false);
   const [stageFull, setStageFull] = useState(false);
   const [stageSize, setStageSize] = useState<{ width: number; height: number } | null>(null);
@@ -703,27 +705,65 @@ export function TryEditor() {
   placeAt.current = (clientX, clientY) => {
     const video = videoRef.current;
     const clip = clipsRef.current.find((item) => item.id === selectedId) ?? null;
-    if (!video || !clip || !clip.stepsOpen || readyId !== clip.id || showResult) return;
-    if (tool !== "ball" && tool !== "landing") return;
-    if (video.videoWidth > 0 && video.videoHeight > 0) videoSize.current = { width: video.videoWidth, height: video.videoHeight };
-    const width = video.videoWidth || videoSize.current.width;
-    const height = video.videoHeight || videoSize.current.height;
-    const point = framePoint(clientX, clientY, video.getBoundingClientRect(), width, height);
-    if (!point) return;
-    if (tool === "ball") {
+    const step = document.querySelector(".edit-app")?.getAttribute("data-step") || tool;
+    if (video && video.videoWidth > 0 && video.videoHeight > 0) {
+      videoSize.current = { width: video.videoWidth, height: video.videoHeight };
+    }
+    const width = video?.videoWidth || videoSize.current.width;
+    const height = video?.videoHeight || videoSize.current.height;
+    const layer = document.querySelector(".tap-layer");
+    const box = layer?.getBoundingClientRect() ?? video?.getBoundingClientRect();
+    const point = box && width > 0 && height > 0 ? framePoint(clientX, clientY, box, width, height) : null;
+    const ready = Boolean(video && video.readyState >= 2 && width > 0 && height > 0);
+    if (!video || !clip) {
+      setTapReject("The video is not on the page.");
+      return;
+    }
+    if (step === "ball") {
+      if (!ready) {
+        setTapReject("The frame is not ready yet.");
+        return;
+      }
+      if (!point) {
+        setTapReject("That tap missed the picture.");
+        return;
+      }
+      setTapReject(null);
       patch(clip.id, (current) => ({ ...current, points: { ...current.points, ball: point }, step: "impact" }));
       setTool("impact");
       return;
     }
-    const landingTime = video.currentTime;
-    const next = { ...clip, points: { ...clip.points, landing: point }, landingTime, hangOverride: false };
+    const decision = landingTapDecision({
+      step,
+      ready,
+      showingResult: showResult,
+      onPicture: Boolean(point),
+      impactTime: clip.impactTime,
+      currentTime: video.currentTime,
+      duration: Number.isFinite(video.duration) ? video.duration : clip.duration,
+    });
+    if (!decision.ok) {
+      setTapReject(decision.reason);
+      return;
+    }
+    if (!point) {
+      setTapReject("That tap missed the picture.");
+      return;
+    }
+    setTapReject(null);
+    const next = { ...clip, points: { ...clip.points, landing: point }, landingTime: decision.landingTime, hangOverride: false };
     patch(clip.id, (current) => ({
       ...current,
       points: { ...current.points, landing: point },
-      landingTime,
+      landingTime: decision.landingTime,
       hangOverride: false,
+      step: "landing",
     }));
-    if (clip.upload === "done" && clip.jobId) void traceClip(next);
+    if (clip.upload !== "done" || !clip.jobId) {
+      setTapReject("Landing is marked. The clip is still uploading, so the draft has not been sent.");
+      return;
+    }
+    void traceClip(next);
   };
 
   useEffect(() => {
@@ -732,12 +772,13 @@ export function TryEditor() {
       if (target?.closest("button, a, input, textarea, select, label")) return;
       const pointerId = event.pointerId;
       const origin = { x: event.clientX, y: event.clientY };
-      gesture.current = pointerId;
+      const generation = (gesture.current ?? 0) + 1;
+      gesture.current = generation;
       const finish = (up: globalThis.PointerEvent) => {
-        if (up.pointerId !== pointerId) return;
+        if (up.pointerId !== pointerId || up.type !== "pointerup") return;
         window.removeEventListener("pointerup", finish);
         window.removeEventListener("pointercancel", finish);
-        if (gesture.current !== pointerId) return;
+        if (gesture.current !== generation) return;
         gesture.current = null;
         placeAt.current(origin.x, origin.y);
       };
@@ -1028,7 +1069,13 @@ export function TryEditor() {
   }
 
   return (
-    <div className="edit-app" data-step={tool} data-upload={selected?.upload ?? ""} data-error={ballMissing ? "ball" : renderFailed ? "render" : ""}>
+    <div
+      className="edit-app"
+      data-step={tool}
+      data-upload={selected?.upload ?? ""}
+      data-error={ballMissing ? "ball" : renderFailed ? "render" : ""}
+      data-tap-reject={tapReject ?? ""}
+    >
       <header className="app-bar">
         <Link href="/" className="wordmark-link">
           <img className="wordmark" src="/brand/logos/traicer-wordmark-light-tight.svg" alt="TrAIcer" width={423} height={192} />
@@ -1082,6 +1129,7 @@ export function TryEditor() {
                   {clipStatusLabel({
                     ball: Boolean(clip.points.ball || clip.snappedBall),
                     impact: clip.impactTime != null,
+                    landing: Boolean(clip.points.landing),
                     drafted: clip.phase === "draft" || Boolean(clip.trajectory) || Boolean(clip.fitId),
                     rendered: clip.phase === "done",
                   })}
@@ -1124,7 +1172,7 @@ export function TryEditor() {
             Shape (optional)
           </button>
         </div>
-        <p className="instruction">{selected ? line : "Add a clip to begin."}</p>
+        <p className="instruction">{tapReject ?? (selected ? line : "Add a clip to begin.")}</p>
         <div className="stage-slot" ref={slotRef}>
           <div
             className="stage"

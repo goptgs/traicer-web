@@ -137,6 +137,15 @@ test("marks a real clip through landing, render, shape, and a second render", as
   await page.getByRole("button", { name: "Set impact" }).click();
   await expect(page.getByText("Clip 1 · Impact set")).toBeVisible();
   await expect(page.getByText("Tap where the ball landed.")).toBeVisible();
+  await page.evaluate(async () => {
+    const video = document.querySelector(".stage video") as HTMLVideoElement;
+    video.pause();
+    video.currentTime = 1;
+    await new Promise((resolve) => {
+      video.onseeked = () => resolve(null);
+      setTimeout(resolve, 4000);
+    });
+  });
 
   await page.mouse.move(box.x + box.width * 0.62, box.y + box.height * 0.72, { steps: 8 });
   await expect(page.locator(".magnifier")).toBeVisible();
@@ -230,4 +239,74 @@ test("landing click after a seek on a 4K 120fps clip", async ({ page }) => {
   await expect.poll(() => bodies.some((body) => JSON.stringify(body).includes('"outputs":[]'))).toBe(true);
   await expect(page.getByText("Clip 1 · Drafted")).toBeVisible();
   await expect(page.locator("video")).toHaveCount(1);
+});
+
+test("119.88 fps, 492 frames: frame 308 sets landing and 10.28s is not silent", async ({ page }) => {
+  const fps = 120000 / 1001;
+  const frames = 492;
+  const path = "/tmp/e2e-11988.mp4";
+  execFileSync("ffmpeg", [
+    "-y",
+    "-f",
+    "lavfi",
+    "-i",
+    `testsrc=size=640x360:rate=${fps}:duration=${frames / fps}`,
+    "-frames:v",
+    String(frames),
+    "-c:v",
+    "libx264",
+    "-preset",
+    "ultrafast",
+    "-pix_fmt",
+    "yuv420p",
+    "-movflags",
+    "+faststart",
+    path,
+  ]);
+  const bodies: unknown[] = [];
+  await page.addInitScript(() => localStorage.clear());
+  await installApi(page, bodies);
+  await page.goto("/try");
+  await page.locator("input[type=file]").setInputFiles(path);
+  await page.waitForFunction(() => (document.querySelector(".stage video") as HTMLVideoElement | null)?.videoWidth === 640);
+  await page.waitForFunction(() => document.querySelector(".edit-app")?.getAttribute("data-upload") === "done");
+  await page.waitForFunction(() => document.querySelector(".tap-layer") && !document.querySelector(".tap-layer.is-waiting"));
+
+  const seek = async (time: number) => {
+    await page.evaluate(async (time) => {
+      const video = document.querySelector(".stage video") as HTMLVideoElement;
+      video.pause();
+      video.currentTime = time;
+      await new Promise((resolve) => {
+        video.onseeked = () => resolve(null);
+        setTimeout(resolve, 4000);
+      });
+    }, time);
+    await page.waitForTimeout(250);
+  };
+  const clickNorm = async (nx: number, ny: number) => {
+    const box = await page.locator(".tap-layer, .stage-media").first().boundingBox();
+    if (!box) throw new Error("no tap target");
+    await page.mouse.click(box.x + nx * box.width, box.y + ny * box.height);
+  };
+
+  await clickNorm(0.49, 0.59);
+  await expect(page.getByText("Clip 1 · Ball set")).toBeVisible();
+  await seek(141 / fps);
+  await page.getByRole("button", { name: "Set impact", exact: true }).click();
+  await expect(page.getByText("Tap where the ball landed.")).toBeVisible();
+  await seek(308 / fps);
+  await clickNorm(0.5022, 0.5195);
+  await expect(page.locator(".marker.is-landing")).toBeVisible();
+  await expect(page.getByText("Clip 1 · Landing set")).toBeVisible();
+  await expect.poll(() => bodies.some((body) => JSON.stringify(body).includes('"outputs":[]'))).toBe(true);
+
+  await seek(10.28);
+  await clickNorm(0.51, 0.48);
+  const outcome = await page.evaluate(() => ({
+    reject: document.querySelector(".edit-app")?.getAttribute("data-tap-reject") ?? "",
+    instruction: document.querySelector(".instruction")?.textContent ?? "",
+    marker: Boolean(document.querySelector(".marker.is-landing")),
+  }));
+  expect(outcome.marker || /after the impact|maximum is 10|missed the picture|not ready|still uploading/.test(`${outcome.reject} ${outcome.instruction}`)).toBeTruthy();
 });

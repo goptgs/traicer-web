@@ -37,12 +37,55 @@ export function isTapStep(step: EditStep): boolean {
   return step === "ball" || step === "landing";
 }
 
-export function clipStatusLabel(input: { ball: boolean; impact: boolean; drafted: boolean; rendered: boolean }): string {
+export function clipStatusLabel(input: {
+  ball: boolean;
+  impact: boolean;
+  landing?: boolean;
+  drafted: boolean;
+  rendered: boolean;
+}): string {
   if (input.rendered) return "Rendered";
   if (input.drafted) return "Drafted";
+  if (input.landing) return "Landing set";
   if (input.impact) return "Impact set";
   if (input.ball) return "Ball set";
   return "Not started";
+}
+
+/** Why a landing tap must not be stored. Null means the clamped time is usable. */
+export function landingTapDecision(input: {
+  step: string;
+  ready: boolean;
+  showingResult: boolean;
+  onPicture: boolean;
+  impactTime: number | null;
+  currentTime: number;
+  duration: number;
+}): { ok: true; landingTime: number } | { ok: false; reason: string } {
+  if (!input.ready) return { ok: false, reason: "The frame is not ready yet." };
+  if (input.showingResult) return { ok: false, reason: "The result is covering the picture." };
+  if (input.step !== "ball" && input.step !== "landing") {
+    return { ok: false, reason: `This step does not take a tap (${input.step}).` };
+  }
+  if (!input.onPicture) return { ok: false, reason: "That tap missed the picture." };
+  if (input.step === "ball") return { ok: true, landingTime: input.currentTime };
+  if (input.impactTime == null || !Number.isFinite(input.impactTime)) {
+    return { ok: false, reason: "Set the impact before the landing." };
+  }
+  if (!Number.isFinite(input.currentTime)) return { ok: false, reason: "The playhead time is not a number." };
+  const duration = Number.isFinite(input.duration) && input.duration > 0 ? input.duration : null;
+  const landingTime = duration != null && input.currentTime > duration ? duration : input.currentTime;
+  if (!(landingTime > input.impactTime + 0.001)) {
+    return {
+      ok: false,
+      reason: `The landing (${landingTime.toFixed(2)} s) has to be after the impact (${input.impactTime.toFixed(2)} s).`,
+    };
+  }
+  const hang = landingTime - input.impactTime;
+  if (hang > 10) {
+    return { ok: false, reason: `Hang time would be ${hang.toFixed(1)} s. The maximum is 10 s.` };
+  }
+  return { ok: true, landingTime };
 }
 
 export function backStep(step: EditStep): EditStep | null {

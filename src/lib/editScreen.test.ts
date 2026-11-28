@@ -11,6 +11,7 @@ import {
   exportCredits,
   hangReadout,
   clipStatusLabel,
+  landingTapDecision,
   impactFrameDelta,
   instruction,
   isTapStep,
@@ -102,8 +103,49 @@ describe("states", () => {
     assert.equal(clipStatusLabel({ ball: false, impact: false, drafted: false, rendered: false }), "Not started");
     assert.equal(clipStatusLabel({ ball: true, impact: false, drafted: false, rendered: false }), "Ball set");
     assert.equal(clipStatusLabel({ ball: true, impact: true, drafted: false, rendered: false }), "Impact set");
+    assert.equal(clipStatusLabel({ ball: true, impact: true, landing: true, drafted: false, rendered: false }), "Landing set");
     assert.equal(clipStatusLabel({ ball: true, impact: true, drafted: true, rendered: false }), "Drafted");
     assert.equal(clipStatusLabel({ ball: true, impact: true, drafted: true, rendered: true }), "Rendered");
+  });
+
+  it("accepts frame 308 after frame 141 at 119.88 fps and explains an out-of-range seek", () => {
+    const fps = 120000 / 1001;
+    const impact = 141 / fps;
+    const landing = 308 / fps;
+    const duration = 492 / fps;
+    const ok = landingTapDecision({
+      step: "landing",
+      ready: true,
+      showingResult: false,
+      onPicture: true,
+      impactTime: impact,
+      currentTime: landing,
+      duration,
+    });
+    assert.equal(ok.ok, true);
+    if (ok.ok) assert.ok(ok.landingTime - impact < 10);
+    const pastEnd = landingTapDecision({
+      step: "landing",
+      ready: true,
+      showingResult: false,
+      onPicture: true,
+      impactTime: Math.min(4.7, duration),
+      currentTime: 10.28,
+      duration,
+    });
+    assert.equal(pastEnd.ok, false);
+    if (!pastEnd.ok) assert.match(pastEnd.reason, /after the impact/);
+    const missed = landingTapDecision({
+      step: "landing",
+      ready: true,
+      showingResult: false,
+      onPicture: false,
+      impactTime: impact,
+      currentTime: landing,
+      duration,
+    });
+    assert.equal(missed.ok, false);
+    if (!missed.ok) assert.match(missed.reason, /missed the picture/);
   });
 
   it("12 a wrong clip is removed or replaced by adding one, with no swap", () => {
